@@ -98,7 +98,7 @@ export const DependencyGraphView: React.FC = () => {
             Total Components
           </span>
           <span className="text-2xl font-bold font-mono text-slate-100 mt-1 block">
-            {graphData.summary.total_components}
+            {graphData.summary?.total_components ?? graphData.nodes?.length ?? 0}
           </span>
         </div>
         <div className="p-4 rounded-xl bg-surface border border-border">
@@ -106,7 +106,7 @@ export const DependencyGraphView: React.FC = () => {
             Direct Dependencies
           </span>
           <span className="text-2xl font-bold font-mono text-cyan-400 mt-1 block">
-            {graphData.summary.direct_dependencies}
+            {graphData.summary?.direct_dependencies ?? 0}
           </span>
         </div>
         <div className="p-4 rounded-xl bg-surface border border-border">
@@ -114,7 +114,7 @@ export const DependencyGraphView: React.FC = () => {
             Transitive Dependencies
           </span>
           <span className="text-2xl font-bold font-mono text-slate-300 mt-1 block">
-            {graphData.summary.transitive_dependencies}
+            {graphData.summary?.transitive_dependencies ?? 0}
           </span>
         </div>
         <div className="p-4 rounded-xl bg-surface border border-border">
@@ -122,7 +122,7 @@ export const DependencyGraphView: React.FC = () => {
             Vulnerable Components
           </span>
           <span className="text-2xl font-bold font-mono text-red-400 mt-1 block">
-            {graphData.summary.vulnerable_components}
+            {graphData.summary?.vulnerable_components ?? 0}
           </span>
         </div>
       </div>

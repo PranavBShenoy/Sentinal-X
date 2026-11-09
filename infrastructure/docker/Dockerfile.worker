@@ -29,15 +29,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Install security scanner binaries
 # Syft
-RUN curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin || true
-# Grype
-RUN curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin || true
+RUN curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
+# Grype & database update
+RUN curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin && \
+    grype db update
 # Trivy
-RUN curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin || true
+RUN curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
 # Gitleaks
-RUN curl -sSfL https://raw.githubusercontent.com/gitleaks/gitleaks/master/scripts/install.sh | sh -s -- -b /usr/local/bin || true
+RUN curl -sSfL https://raw.githubusercontent.com/gitleaks/gitleaks/master/scripts/install.sh | sh -s -- -b /usr/local/bin
 # Semgrep
-RUN pip install --no-cache-dir semgrep || true
+RUN pip install --no-cache-dir semgrep
+# OSV-Scanner (v2.7.1) & offline database hydration
+RUN curl -sSL -o /usr/local/bin/osv-scanner https://github.com/google/osv-scanner/releases/download/v2.7.1/osv-scanner_linux_amd64 && \
+    chmod +x /usr/local/bin/osv-scanner && \
+    mkdir -p /root/.cache/osv-scalibr/PyPI && \
+    curl -sSL -o /root/.cache/osv-scalibr/PyPI/all.zip https://osv-vulnerabilities.storage.googleapis.com/PyPI/all.zip
 
 COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin

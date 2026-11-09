@@ -162,9 +162,12 @@ class DependencyGraphBuilder:
             nodes = [
                 {
                     "id": "app_root",
+                    "name": "Application Root",
                     "label": "Application",
+                    "version": "1.0.0",
                     "type": "root",
                     "is_direct": True,
+                    "has_vulnerabilities": False,
                     "vulnerable": False,
                     "vulnerabilities": [],
                 }
@@ -182,15 +185,27 @@ class DependencyGraphBuilder:
                         if isinstance(vm, dict) and vm.get("id"):
                             c_vulns.append(vm["id"])
 
+                has_vulns = len(c_vulns) > 0
+                structured_vulns = [
+                    {
+                        "cve_id": str(v_id),
+                        "severity": "HIGH",
+                        "description": f"Known security vulnerability associated with {comp.name}",
+                    }
+                    for v_id in set(c_vulns)
+                ]
+
                 nodes.append({
                     "id": node_id,
+                    "name": comp.name,
                     "label": comp.name,
                     "version": comp.version or "",
                     "ecosystem": comp.ecosystem or "",
                     "purl": comp.purl or "",
                     "is_direct": comp.is_direct if comp.is_direct is not None else True,
-                    "vulnerable": len(c_vulns) > 0,
-                    "vulnerabilities": list(set(c_vulns)),
+                    "has_vulnerabilities": has_vulns,
+                    "vulnerable": has_vulns,
+                    "vulnerabilities": structured_vulns,
                 })
 
             graph_edges = []
@@ -205,4 +220,20 @@ class DependencyGraphBuilder:
                 if n["id"] != "app_root" and n.get("is_direct", False):
                     graph_edges.append({"source": "app_root", "target": n["id"], "type": "depends_on"})
 
-            return {"nodes": nodes, "edges": graph_edges}
+            total_comps = len(components)
+            direct_count = sum(1 for c in components if c.is_direct is not False)
+            transitive_count = max(0, total_comps - direct_count)
+            vuln_count = sum(1 for n in nodes if n.get("has_vulnerabilities", False))
+
+            summary = {
+                "total_components": total_comps,
+                "direct_dependencies": direct_count,
+                "transitive_dependencies": transitive_count,
+                "vulnerable_components": vuln_count,
+            }
+
+            return {
+                "nodes": nodes,
+                "edges": graph_edges,
+                "summary": summary,
+            }

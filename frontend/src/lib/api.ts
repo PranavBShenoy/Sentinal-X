@@ -267,7 +267,8 @@ class ApiClient {
   }
 
   getReportDownloadUrl(reportId: string): string {
-    return `${API_BASE}/reports/${reportId}/download`;
+    const token = this.accessToken ? `?token=${encodeURIComponent(this.accessToken)}` : '';
+    return `${API_BASE}/reports/${reportId}/download${token}`;
   }
 }
 

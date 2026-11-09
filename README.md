@@ -96,8 +96,14 @@ pip install pytest pytest-cov
 # Run migrations
 alembic upgrade head
 
-# Run complete test suite (76 tests: 75 passed, 1 skipped)
+# Run complete test suite (77 tests: 76 passed, 1 skipped)
 PYTHONPATH=. python -m pytest tests/ -v
+```
+
+### Real Browser E2E Test Suite (Headless Chromium & Selenium)
+```bash
+# Verify headless Chromium & Selenium E2E flow
+PYTHONPATH=. python -m pytest tests/e2e/test_browser_e2e.py -v
 ```
 
 ### Frontend Setup & Build

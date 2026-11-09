@@ -6,6 +6,7 @@ The API server never executes repository code or runs scanners directly.
 """
 from __future__ import annotations
 
+import os
 from celery import Celery
 from celery.utils.log import get_task_logger
 
@@ -29,6 +30,7 @@ celery_app.conf.update(
     accept_content=["json"],
 
     # Reliability
+    task_always_eager=settings.APP_ENV in ("test", "testing") or os.environ.get("CELERY_TASK_ALWAYS_EAGER", "false").lower() in ("true", "1"),
     task_acks_late=True,
     task_reject_on_worker_lost=True,
     worker_prefetch_multiplier=1,  # Fair distribution

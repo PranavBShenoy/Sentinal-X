@@ -144,6 +144,7 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 
 @app.get("/health", tags=["system"])
+@app.get("/api/v1/health", tags=["system"])
 def health_check():
     """Health check endpoint for container orchestrators and monitoring."""
     rl_status = limiter.get_status()
