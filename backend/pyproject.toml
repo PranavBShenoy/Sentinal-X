@@ -27,8 +27,9 @@ dependencies = [
     "redis>=5.0.0",
 
     # Validation
-    "pydantic>=2.4.0",
+    "pydantic[email]>=2.4.0",
     "pydantic-settings>=2.0.0",
+    "email-validator>=2.0.0",
 
     # Auth
     "PyJWT>=2.8.0",
