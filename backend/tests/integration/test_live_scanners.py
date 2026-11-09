@@ -9,6 +9,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 from app.integrations.gitleaks.scanner import GitleaksScanner
 from app.integrations.grype.scanner import GrypeScanner
@@ -35,6 +36,53 @@ from app.reporting.generator import ReportGenerator
 
 class InsecureTestServer(BaseHTTPRequestHandler):
     def do_GET(self):
+        parsed = urlparse(self.path)
+        query = parse_qs(parsed.query)
+
+        # 1. Open redirect simulation
+        if "redirect" in query or "next" in query:
+            dest = (query.get("redirect") or query.get("next"))[0]
+            self.send_response(302)
+            self.send_header("Location", dest)
+            self.end_headers()
+            return
+
+        # 2. Reflected XSS simulation
+        if "q" in query or "search" in query:
+            q_val = (query.get("q") or query.get("search"))[0]
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(f"<html><body>Search results for: {q_val}</body></html>".encode())
+            return
+
+        # 3. SQL injection error disclosure simulation
+        if "id" in query:
+            id_val = query.get("id")[0]
+            if "'" in id_val or "%27" in id_val:
+                self.send_response(500)
+                self.send_header("Content-Type", "text/plain")
+                self.end_headers()
+                self.wfile.write(b"Internal Error: syntax error at or near 'OR' at line 1")
+                return
+
+        # 4. API discovery
+        if parsed.path in ("/openapi.json", "/swagger.json"):
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"openapi": "3.0.0", "info": {"title": "Test App"}, "paths": {"/users": {}}}')
+            return
+
+        # 5. Access control probe
+        if parsed.path in ("/admin", "/api/admin", "/metrics"):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(b"Welcome to unauthenticated Admin Dashboard - metric users active: 42")
+            return
+
+        # Default response with insecure headers & cookie
         self.send_response(200)
         self.send_header("Content-Type", "text/html")
         self.send_header("Server", "Apache/2.4.41 (Ubuntu)")
@@ -162,10 +210,10 @@ def test_live_native_dast_against_test_application(db, test_user):
         dast = ZapScanner()
         result = dast.scan(str(assessment.id), f"http://127.0.0.1:{port}")
 
-        # Scan completed; check status is FAILED because insecure headers were detected
+        # Scan completed; check status is FAILED because insecure headers and vulnerabilities were detected
         assert result["status"] == ScanJobStatus.COMPLETED.value
         assert result["check_status"] == CheckStatus.FAILED.value
-        assert result["findings_count"] >= 3
+        assert result["findings_count"] >= 6
 
         findings = db.query(Finding).filter(Finding.assessment_id == str(assessment.id)).all()
         titles = [f.title for f in findings]
@@ -173,7 +221,14 @@ def test_live_native_dast_against_test_application(db, test_user):
         # Verify specific DAST findings
         assert any("Content-Security-Policy" in t for t in titles)
         assert any("X-Content-Type-Options" in t for t in titles)
+        assert any("Referrer-Policy" in t for t in titles)
+        assert any("Permissions-Policy" in t for t in titles)
         assert any("Server" in t for t in titles)
+        assert any("Redirect" in t for t in titles)
+        assert any("XSS" in t for t in titles)
+        assert any("SQL Injection" in t for t in titles)
+        assert any("Admin" in t or "Access" in t for t in titles)
+        assert any("OpenAPI" in t or "API" in t for t in titles)
 
     finally:
         server.shutdown()

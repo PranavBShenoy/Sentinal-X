@@ -390,11 +390,7 @@ class SafeSSRFClient(httpx.Client):
         verify: bool = True,
         **kwargs: Any,
     ) -> None:
-        self.allow_internal_runtime = allow_internal_runtime
-        self.max_redirects = max_redirects
         transport = SafeSSRFTransport(allow_internal_runtime=allow_internal_runtime, verify=verify)
-
-        # Enforce strict timeouts: connect 5s, read 10s, write 5s, pool 5s
         enforced_timeout = httpx.Timeout(timeout, connect=min(timeout, 5.0), read=timeout)
 
         super().__init__(
@@ -405,6 +401,8 @@ class SafeSSRFClient(httpx.Client):
             verify=verify,
             **kwargs,
         )
+        self.allow_internal_runtime = allow_internal_runtime
+        self.max_redirects = max_redirects
 
     def request(self, method: str, url: str | httpx.URL, **kwargs: Any) -> httpx.Response:
         """
@@ -414,11 +412,12 @@ class SafeSSRFClient(httpx.Client):
         # Pre-validate the destination URL
         validate_target_url(current_url, allow_internal_runtime=self.allow_internal_runtime)
 
+        should_follow = kwargs.pop("follow_redirects", True) and (self.max_redirects > 0)
         redirect_count = 0
         while True:
             response = super().request(method, current_url, **kwargs)
 
-            if response.is_redirect and self.max_redirects > 0:
+            if response.is_redirect and should_follow:
                 redirect_count += 1
                 if redirect_count > self.max_redirects:
                     raise SSRFValidationError(f"Maximum redirect limit ({self.max_redirects}) exceeded.")

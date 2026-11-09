@@ -13,13 +13,15 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncGenerator
 
-from fastapi import FastAPI, Request, status
+from fastapi import FastAPI, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from sqlalchemy import text
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.api.v1.router import api_router
 from app.core.config import get_settings
+from app.core.database import db_session
 from app.core.logging import configure_logging, get_logger
 from app.core.rate_limiter import limiter
 
@@ -154,6 +156,45 @@ def health_check():
         "service": "sentinelx-api",
         "environment": settings.APP_ENV,
         "rate_limiter": rl_status,
+        "timestamp": time.time(),
+    }
+
+
+@app.get("/health/live", tags=["system"])
+@app.get("/api/v1/health/live", tags=["system"])
+def liveness_check():
+    """Liveness probe confirming the API process is responsive."""
+    return {"status": "alive", "service": "sentinelx-api", "timestamp": time.time()}
+
+
+@app.get("/health/ready", tags=["system"])
+@app.get("/api/v1/health/ready", tags=["system"])
+def readiness_check(response: Response):
+    """
+    Readiness probe validating database and Redis connectivity.
+    Returns 200 when ready to accept traffic; 503 if any downstream dependency fails.
+    """
+    db_ok = False
+    db_error = None
+    try:
+        with db_session() as db:
+            db.execute(text("SELECT 1"))
+            db_ok = True
+    except Exception as e:
+        db_error = str(e)
+
+    rl_status = limiter.get_status()
+    redis_ok = not rl_status.get("degraded", False)
+
+    is_ready = db_ok and redis_ok
+    if not is_ready:
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+
+    return {
+        "status": "ready" if is_ready else "degraded",
+        "service": "sentinelx-api",
+        "database": {"connected": db_ok, "error": db_error},
+        "redis": {"connected": redis_ok, "details": rl_status},
         "timestamp": time.time(),
     }
 

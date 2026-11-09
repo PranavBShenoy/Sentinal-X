@@ -132,6 +132,31 @@ erDiagram
 
 ---
 
+## 1.1 Complete Verified Schema Tables (16 Tables)
+
+The production schema managed by Alembic (`2026_11_09_2030-1dca02b9811e_initial_schema.py`) defines exactly 15 domain tables and 1 migration tracking table:
+
+| # | Table Name | Purpose & Contents |
+|---|---|---|
+| 1 | `users` | User accounts, bcrypt password hashes (cost factor 12), RBAC flags (`is_superuser`, `is_active`), timestamps. |
+| 2 | `user_sessions` | Authenticated session records, refresh token hashes, client user agent, remote IP, expiry timestamps. |
+| 3 | `audit_logs` | Immutable audit trail capturing user actions, target resource IDs, remote IPs, and operation metadata. |
+| 4 | `github_installations` | GitHub App installation mappings, target accounts, repository scopes, and installation tokens. |
+| 5 | `projects` | Multi-tenant projects, owner relationships, custom scanning configurations, metadata JSON. |
+| 6 | `repositories` | Connected Git repositories, clone URLs, default branches, and Fernet-encrypted access tokens. |
+| 7 | `assessments` | Security assessment runs, commit SHAs, branch names, target URLs, stage tracking, risk scores. |
+| 8 | `scan_jobs` | Individual scanner executions (tool name, execution duration, exit codes, stdout/stderr status). |
+| 9 | `findings` | Normalized security findings with stable SHA-256 fingerprints, CVSS scores, risk scores, AI summaries. |
+| 10 | `sbom_components` | Inventory of discovered software packages (purl, ecosystem, version, direct vs. transitive). |
+| 11 | `dependency_edges` | Directed graph relationships between components for transitive reachability analysis. |
+| 12 | `sbom_artifacts` | Raw and converted CycloneDX/SPDX SBOM files, formats, integrity hashes. |
+| 13 | `remediation_proposals` | Generated remediation patches, unified diffs, suggested branch names, review/merge states. |
+| 14 | `runtime_environments` | Ephemeral Docker container tracking (container IDs, isolated ports, cgroup limits). |
+| 15 | `reports` | Generated security reports (JSON, SARIF, PDF), storage paths, file sizes, SHA-256 hashes. |
+| 16 | `alembic_version` | Alembic database migration version tracking (verifies migration head `1dca02b9811e`). |
+
+---
+
 ## 2. Multi-Tenant Isolation Guarantees
 - **Strict Row-Level Authorization**: All API controllers verify that `Project.owner_id == current_user.id` or that the user has explicit project-level permissions.
 - **Cascading Referential Integrity**: Deleting a project cascades cleanly across all child repositories, assessments, scan jobs, findings, SBOM components, and reports.

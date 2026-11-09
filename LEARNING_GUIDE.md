@@ -510,8 +510,8 @@ The verification suite exercises the complete lifecycle of a security assessment
 | Tool | Version | Mode | Target Fixture | Test Case | Status | Verified Findings |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
 | **Gitleaks** | 8.18.4 | Local binary | `tests/fixtures/secret_leak` | `test_live_gitleaks_actual_binary_and_secret_masking` | **PASS** | AWS Key, Generic API Key (Masked) |
-| **Trivy** | 0.57.1 | Local binary | `tests/fixtures/vuln_deps` | `test_live_trivy_vulnerability_detection` | **PASS** | CVE-2018-18074 on requests 2.6.0 |
-| **Zap / Native DAST** | 1.0.0 | HTTP server | Port 9877 | `test_live_native_dast_against_test_application` | **PASS** | Missing CSP, X-Content-Type, Server header |
+| **Trivy** | 0.76.2 | Local binary | `tests/fixtures/vuln_deps` | `test_live_trivy_vulnerability_detection` | **PASS** | CVE-2018-18074 on requests 2.6.0 |
+| **Zap / Native DAST** | 1.0.0 | HTTP server | Port 9877 | `test_live_native_dast_against_test_application` | **PASS** | 11 categories: Security Headers, TLS, CORS, Cookies, Open Redirect, API Discovery, Access Control, SQLi Error, Reflected XSS, Rate Limiting |
 | **Reports Engine** | 1.0.0 | Real generator | Assessment DB | `test_report_generation_formats_integrity` | **PASS** | JSON, SARIF 2.1.0, CSV non-empty |
 | **Semgrep SAST** | 1.184.0 | Python 3.12 / offline rules | `tests/fixtures/vuln_sqli` | `test_live_semgrep_sast_vulnerability_detection` | **PASS** | SQL injection line 20 (`cursor.execute`), `rules.semgrep.` prefix |
 | **Grype** | 0.121.3 | Offline v6 DB (v6.1.10) | CycloneDX + `vuln_deps` | `test_live_grype_vulnerability_detection_against_sbom_and_dir` | **PASS** | 16 CVEs (requests 2.6.0, urllib3 1.25.8), missing DB tested |

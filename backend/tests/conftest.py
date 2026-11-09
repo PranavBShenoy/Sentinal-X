@@ -18,6 +18,11 @@ os.environ["DATABASE_URL"] = f"sqlite:///{TEST_DB_PATH}"
 os.environ["JWT_SECRET"] = "a" * 64
 os.environ["ENCRYPTION_KEY"] = "U1RST05HX0ZFUk5FVF9LRVlfVEVTVF9PQUJDRDExMjI="
 
+# Prepend project bin directory to PATH for scanner binaries
+bin_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "bin"))
+if os.path.isdir(bin_dir) and bin_dir not in os.environ.get("PATH", ""):
+    os.environ["PATH"] = f"{bin_dir}:{os.environ.get('PATH', '')}"
+
 from app.core import database
 from app.core.database import Base, get_db
 from app.core.security import create_access_token, hash_password

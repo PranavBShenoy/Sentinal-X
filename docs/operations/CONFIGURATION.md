@@ -58,3 +58,16 @@ This document provides the definitive configuration reference for all SENTINEL-X
 | `GITHUB_PRIVATE_KEY` | `""` | GitHub App RSA Private Key in PEM format |
 | `GITHUB_CLIENT_ID` | `""` | GitHub OAuth App Client ID |
 | `GITHUB_CLIENT_SECRET` | `""` | GitHub OAuth App Client Secret |
+
+---
+
+## 5. External Dependency Status & Safe Fallbacks
+
+SENTINEL-X is designed with zero-cascade dependency resilience:
+
+| External Dependency | Status When Unconfigured | Fallback Behavior & Security Guard |
+| :--- | :--- | :--- |
+| **OpenRouter LLM API** (`OPENROUTER_API_KEY`) | Optional | Evaluates deterministic, rule-grounded vulnerability explanations and sample unified diffs. No outgoing HTTP requests are made. Untrusted inputs are never leaked. |
+| **GitHub App / OAuth** (`GITHUB_APP_ID`, `GITHUB_CLIENT_ID`) | Optional | Manual repository clone URLs and personal access tokens are supported. Webhook receivers validate HMAC signatures and fail-closed (401) on missing secrets. |
+| **Docker Host Daemon** (`/var/run/docker.sock`) | Optional | If Docker is absent or locked down (e.g. unprivileged CI container), runtime provisioning records `BLOCKED` for dynamic testing, while all static scanners, SBOM generation, correlation, and reports continue and complete. |
+| **Redis Broker** (`REDIS_URL`) | Optional | Automatic in-memory sliding window rate limiter fallback is engaged transparently with warning logs. |
