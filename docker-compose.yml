@@ -1,0 +1,127 @@
+# ==============================================================================
+# SENTINEL-X Production & Staging Docker Compose Stack
+# SECURITY NOTICE: Override all passwords and secret keys in your .env file
+# before deploying to any staging or production environment.
+# ==============================================================================
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: sentinelx-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-sentinelx}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sentinelx_dev_pass_change_in_prod}
+      POSTGRES_DB: ${POSTGRES_DB:-sentinelx}
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-sentinelx} -d ${POSTGRES_DB:-sentinelx}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - sentinelx-internal
+
+  redis:
+    image: redis:7-alpine
+    container_name: sentinelx-redis
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - sentinelx-internal
+
+  api:
+    build:
+      context: ./backend
+      dockerfile: ../infrastructure/docker/Dockerfile.api
+    container_name: sentinelx-api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - ENVIRONMENT=${ENVIRONMENT:-development}
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-sentinelx}:${POSTGRES_PASSWORD:-sentinelx_dev_pass_change_in_prod}@postgres:5432/${POSTGRES_DB:-sentinelx}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+      - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://redis:6379/0}
+      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://redis:6379/1}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-sentinelx_jwt_secret_min_32_bytes_dev_only!}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY:-dGhpcy1pcy1hLTMyLWJ5dGUtc2VjcmV0LWtleS0xMjM0NTY=}
+      - LLM_PROVIDER=${LLM_PROVIDER:-openrouter}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - OPENROUTER_MODEL=${OPENROUTER_MODEL:-anthropic/claude-3.5-sonnet}
+      - CORS_ORIGINS=${CORS_ORIGINS:-["http://localhost:3000","http://127.0.0.1:3000","http://localhost:8000"]}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - workspace_data:/var/lib/sentinelx/workspaces
+      - reports_data:/var/lib/sentinelx/reports
+    networks:
+      - sentinelx-internal
+      - sentinelx-public
+
+  worker:
+    build:
+      context: ./backend
+      dockerfile: ../infrastructure/docker/Dockerfile.worker
+    container_name: sentinelx-worker
+    restart: unless-stopped
+    environment:
+      - ENVIRONMENT=${ENVIRONMENT:-development}
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-sentinelx}:${POSTGRES_PASSWORD:-sentinelx_dev_pass_change_in_prod}@postgres:5432/${POSTGRES_DB:-sentinelx}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+      - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://redis:6379/0}
+      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://redis:6379/1}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-sentinelx_jwt_secret_min_32_bytes_dev_only!}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY:-dGhpcy1pcy1hLTMyLWJ5dGUtc2VjcmV0LWtleS0xMjM0NTY=}
+      - LLM_PROVIDER=${LLM_PROVIDER:-openrouter}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - workspace_data:/var/lib/sentinelx/workspaces
+      - reports_data:/var/lib/sentinelx/reports
+    networks:
+      - sentinelx-internal
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: ../infrastructure/docker/Dockerfile.frontend
+    container_name: sentinelx-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    depends_on:
+      - api
+    networks:
+      - sentinelx-public
+
+volumes:
+  postgres_data:
+  redis_data:
+  workspace_data:
+  reports_data:
+
+networks:
+  sentinelx-internal:
+    internal: true
+  sentinelx-public:
+    driver: bridge

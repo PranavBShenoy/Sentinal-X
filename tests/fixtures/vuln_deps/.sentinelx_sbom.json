@@ -1,0 +1,101 @@
+{
+  "$schema": "http://cyclonedx.org/schema/bom-1.7.schema.json",
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.7",
+  "serialNumber": "urn:uuid:866875a6-83cc-43e0-b062-9a52d448ddd8",
+  "version": 1,
+  "metadata": {
+    "timestamp": "2026-11-09T18:09:57+00:00",
+    "tools": {
+      "components": [
+        {
+          "type": "application",
+          "manufacturer": {
+            "name": "Aqua Security Software Ltd."
+          },
+          "group": "aquasecurity",
+          "name": "trivy",
+          "version": "0.76.2"
+        }
+      ]
+    },
+    "component": {
+      "bom-ref": "7914b647-447d-48a5-9899-e60ef42c3f48",
+      "type": "application",
+      "name": "/home/pranav/Sentinal-X/tests/fixtures/vuln_deps",
+      "properties": [
+        {
+          "name": "aquasecurity:trivy:SchemaVersion",
+          "value": "2"
+        }
+      ]
+    }
+  },
+  "components": [
+    {
+      "bom-ref": "437fbe60-9d14-4d20-af6b-1d022c9c6e0f",
+      "type": "application",
+      "name": "requirements.txt",
+      "properties": [
+        {
+          "name": "aquasecurity:trivy:Class",
+          "value": "lang-pkgs"
+        },
+        {
+          "name": "aquasecurity:trivy:Type",
+          "value": "pip"
+        }
+      ]
+    },
+    {
+      "bom-ref": "pkg:pypi/requests@2.6.0",
+      "type": "library",
+      "name": "requests",
+      "version": "2.6.0",
+      "purl": "pkg:pypi/requests@2.6.0",
+      "properties": [
+        {
+          "name": "aquasecurity:trivy:PkgType",
+          "value": "pip"
+        }
+      ]
+    },
+    {
+      "bom-ref": "pkg:pypi/urllib3@1.25.8",
+      "type": "library",
+      "name": "urllib3",
+      "version": "1.25.8",
+      "purl": "pkg:pypi/urllib3@1.25.8",
+      "properties": [
+        {
+          "name": "aquasecurity:trivy:PkgType",
+          "value": "pip"
+        }
+      ]
+    }
+  ],
+  "dependencies": [
+    {
+      "ref": "437fbe60-9d14-4d20-af6b-1d022c9c6e0f",
+      "dependsOn": [
+        "pkg:pypi/requests@2.6.0",
+        "pkg:pypi/urllib3@1.25.8"
+      ]
+    },
+    {
+      "ref": "7914b647-447d-48a5-9899-e60ef42c3f48",
+      "dependsOn": [
+        "437fbe60-9d14-4d20-af6b-1d022c9c6e0f"
+      ]
+    },
+    {
+      "ref": "pkg:pypi/requests@2.6.0",
+      "dependsOn": []
+    },
+    {
+      "ref": "pkg:pypi/urllib3@1.25.8",
+      "dependsOn": []
+    }
+  ],
+  "vulnerabilities": []
+}

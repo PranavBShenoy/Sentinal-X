@@ -1,0 +1,47 @@
+# Multi-stage Dockerfile for SENTINEL-X Control Plane API
+FROM python:3.11-slim as builder
+
+WORKDIR /build
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY pyproject.toml .
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir .
+
+FROM python:3.11-slim as runner
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libpq5 \
+    curl \
+    git \
+    libpango-1.0-0 \
+    libharfbuzz0b \
+    libpangoft2-1.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
+COPY --from=builder /usr/local/bin /usr/local/bin
+
+COPY app /app/app
+COPY migrations /app/migrations
+COPY alembic.ini /app/alembic.ini
+
+# Create non-root user for security
+RUN groupadd -r sentinelx && useradd -r -g sentinelx -s /bin/bash sentinelx && \
+    mkdir -p /var/lib/sentinelx/workspaces /var/lib/sentinelx/reports && \
+    chown -R sentinelx:sentinelx /app /var/lib/sentinelx
+
+USER sentinelx
+
+EXPOSE 8000
+
+HEALTHCHECK --interval=10s --timeout=5s --start-period=10s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]

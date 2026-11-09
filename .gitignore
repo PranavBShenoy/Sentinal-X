@@ -12,6 +12,7 @@ downloads/
 eggs/
 .eggs/
 lib/
+!frontend/src/lib/
 lib64/
 parts/
 sdist/
@@ -95,3 +96,10 @@ backend/migrations/versions/__pycache__/
 
 # Assessment workspaces
 /assessment_workspaces/
+
+# Local binaries and pipx tools
+bin/
+.pipx/
+.semgrep-env/
+.uv/
+
