@@ -92,6 +92,22 @@ jobs:
               print(f'PostgreSQL schema verified successfully ({table_count} tables found).')
           "
 
+      - name: Install Security Scanners for Integration Tests
+        run: |
+          # 1. Gitleaks
+          curl -sSL https://github.com/gitleaks/gitleaks/releases/download/v8.18.4/gitleaks_8.18.4_linux_x64.tar.gz | sudo tar -xz -C /usr/local/bin gitleaks
+          # 2. Trivy
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sudo sh -s -- -b /usr/local/bin
+          # 3. Syft
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sudo sh -s -- -b /usr/local/bin
+          # 4. Grype
+          curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sudo sh -s -- -b /usr/local/bin
+          grype db update
+          # 5. OSV-Scanner (v2.7.1)
+          sudo curl -sSL -o /usr/local/bin/osv-scanner https://github.com/google/osv-scanner/releases/download/v2.7.1/osv-scanner_linux_amd64 && sudo chmod +x /usr/local/bin/osv-scanner
+          # 6. Semgrep
+          pip install semgrep
+
       - name: Run Pytest Test Suite
         working-directory: ./backend
         env:

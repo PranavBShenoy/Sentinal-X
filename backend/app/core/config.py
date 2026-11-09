@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 from functools import lru_cache
+from pathlib import Path
 from typing import List, Optional
 
 from pydantic import Field, field_validator
@@ -110,7 +111,11 @@ class Settings(BaseSettings):
     # Scanner tool paths
     # ------------------------------------------------------------------ #
     SEMGREP_PATH: str = "/home/pranav/Sentinal-X/bin/semgrep" if os.path.exists("/home/pranav/Sentinal-X/bin/semgrep") else "semgrep"
-    SEMGREP_RULES_PATH: str = "/home/pranav/Sentinal-X/rules/semgrep/default_rules.json"
+    SEMGREP_RULES_PATH: str = (
+        str(Path(__file__).resolve().parent.parent.parent.parent / "rules" / "semgrep" / "default_rules.json")
+        if (Path(__file__).resolve().parent.parent.parent.parent / "rules" / "semgrep" / "default_rules.json").exists()
+        else "/home/pranav/Sentinal-X/rules/semgrep/default_rules.json"
+    )
     GITLEAKS_PATH: str = "/home/pranav/Sentinal-X/bin/gitleaks" if os.path.exists("/home/pranav/Sentinal-X/bin/gitleaks") else "gitleaks"
     SYFT_PATH: str = "/home/pranav/Sentinal-X/bin/syft" if os.path.exists("/home/pranav/Sentinal-X/bin/syft") else "syft"
     GRYPE_PATH: str = "/home/pranav/Sentinal-X/bin/grype" if os.path.exists("/home/pranav/Sentinal-X/bin/grype") else "grype"
