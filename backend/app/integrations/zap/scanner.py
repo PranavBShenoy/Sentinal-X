@@ -24,6 +24,7 @@ import httpx
 from app.core.config import get_settings
 from app.core.database import db_session
 from app.core.logging import get_logger
+from app.core.ssrf import SafeSSRFClient, validate_target_url
 from app.models import (
     CheckStatus,
     ConfidenceLevel,
@@ -86,10 +87,10 @@ class ZapScanner:
                 "message": msg,
             }
 
-        # Validate target_url reachability
+        # Validate target_url reachability using SafeSSRFClient
         target_accessible = False
         try:
-            with httpx.Client(timeout=10, verify=False) as client:
+            with SafeSSRFClient(allow_internal_runtime=True, timeout=10, verify=False) as client:
                 resp = client.get(target_url)
                 target_accessible = True
         except Exception as e:
@@ -161,7 +162,7 @@ class ZapScanner:
         findings_to_add: List[Finding] = []
 
         try:
-            with httpx.Client(timeout=15, verify=False, follow_redirects=True) as client:
+            with SafeSSRFClient(allow_internal_runtime=True, timeout=15, verify=False, max_redirects=5) as client:
                 res = client.get(target_url)
                 headers = {k.lower(): v for k, v in res.headers.items()}
                 cookies = res.cookies

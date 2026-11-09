@@ -262,18 +262,23 @@ class RuntimeOrchestrator:
         host_port = self._find_available_port()
 
         # STRICT ISOLATION CONTROLS:
-        # - cap-drop=ALL
-        # - memory=512m
-        # - cpus=1.0
-        # - pids-limit=100
-        # - no privileged
+        # - cap-drop=ALL (drop all Linux kernel capabilities)
+        # - security-opt=no-new-privileges:true (prevent setuid privilege escalation)
+        # - memory=512m (RAM limit against resource exhaustion)
+        # - cpus=1.0 (CPU quota limit)
+        # - pids-limit=100 (fork-bomb defense)
+        # - read-only root filesystem with ephemeral tmpfs
         # - isolated port binding on 127.0.0.1 ONLY (not 0.0.0.0)
+        # - no Docker socket or host volumes mounted
         args = [
             "docker",
             "run",
             "-d",
             f"--name={container_name}",
             "--cap-drop=ALL",
+            "--security-opt=no-new-privileges:true",
+            "--read-only",
+            "--tmpfs=/tmp:rw,noexec,nosuid,size=64m",
             "--memory=512m",
             "--cpus=1.0",
             "--pids-limit=100",
@@ -290,7 +295,7 @@ class RuntimeOrchestrator:
         return True, host_port, safe_output
 
     def _generate_dockerfile(self, profile: ProjectProfile) -> str:
-        """Create a standard, secure Dockerfile for supported frameworks."""
+        """Create a standard, secure Dockerfile with non-root user for supported frameworks."""
         pt = profile.project_type
         if pt in ("fastapi", "flask"):
             entry_module = "main:app"
@@ -298,10 +303,12 @@ class RuntimeOrchestrator:
                 module_name = Path(profile.entry_point).stem
                 entry_module = f"{module_name}:app"
             return (
-                "FROM python:3.11-slim\n"
+                "FROM python:3.11-slim-bookworm\n"
                 "WORKDIR /app\n"
                 "COPY . /app\n"
                 "RUN if [ -f requirements.txt ]; then pip install --no-cache-dir -r requirements.txt; fi\n"
+                "RUN groupadd -r appuser && useradd -r -g appuser -u 10001 -s /bin/false appuser && chown -R appuser:appuser /app\n"
+                "USER appuser\n"
                 f"EXPOSE {profile.port}\n"
                 f"CMD [\"python\", \"-m\", \"uvicorn\", \"{entry_module}\", \"--host\", \"0.0.0.0\", \"--port\", \"{profile.port}\"]\n"
             )
@@ -311,6 +318,7 @@ class RuntimeOrchestrator:
                 "WORKDIR /app\n"
                 "COPY . /app\n"
                 "RUN if [ -f package.json ]; then npm install --production --silent; fi\n"
+                "USER node\n"
                 f"EXPOSE {profile.port}\n"
                 "CMD [\"npm\", \"start\"]\n"
             )

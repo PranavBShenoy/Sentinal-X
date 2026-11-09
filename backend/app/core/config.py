@@ -71,6 +71,16 @@ class Settings(BaseSettings):
     # ------------------------------------------------------------------ #
     CORS_ORIGINS: str = "http://localhost:5173,http://localhost:3000"
 
+    # ------------------------------------------------------------------ #
+    # Rate Limiting & Reverse Proxies
+    # ------------------------------------------------------------------ #
+    TRUSTED_PROXIES: str = "127.0.0.1,::1"
+    RATE_LIMIT_ENABLED: bool = True
+
+    @property
+    def trusted_proxies_list(self) -> List[str]:
+        return [p.strip() for p in self.TRUSTED_PROXIES.split(",") if p.strip()]
+
     @property
     def cors_origins_list(self) -> List[str]:
         return [o.strip() for o in self.CORS_ORIGINS.split(",") if o.strip()]

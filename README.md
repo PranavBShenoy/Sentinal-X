@@ -10,9 +10,9 @@ SENTINEL-X is an enterprise-grade security assessment platform designed to bridg
 
 - **Multi-Engine Static & Secret Analysis**: Semgrep SAST, Gitleaks secret detection with automatic credential masking, and Trivy infrastructure/configuration audits.
 - **Supply-Chain Visibility & Graph**: CycloneDX 1.5 SBOM generation with Syft, vulnerability intelligence with Anchore Grype and OSV.dev, and NetworkX directed graph analysis for transitive reachability.
-- **Hardened Isolated Docker Runtime**: Ephemeral application provisioning with dropped capabilities (`cap_drop=['ALL']`), non-root execution, memory/CPU caps, and active HTTP health probing.
-- **Dynamic Application Testing (DAST)**: OWASP ZAP spidering and active scanning, plus native security header auditing (CSP, HSTS, X-Frame-Options, Cookie security flags, CORS reflection).
-- **SSRF Defense Architecture**: Strict IP and DNS verification blocking loopback addresses, link-local metadata endpoints (`169.254.169.254`), and private cloud subnets.
+- **SSRF Defense Architecture (SEC-01)**: Comprehensive IP and DNS verification engine with socket-level connection pinning (`PinnedSSRFNetworkBackend`), blocking loopback, link-local metadata (`169.254.169.254`), RFC 1918 subnets, alternative IP encodings, and DNS rebinding attacks.
+- **Shared Atomic Rate Limiting (OPS-01)**: Distributed Redis-backed sliding-window rate limiter executed via Lua script, client IP spoofing protection with `TRUSTED_PROXIES`, and full RFC 6585 compliance.
+- **Hardened Isolated Docker Runtime (INFRA-01)**: Ephemeral application provisioning with dropped capabilities (`cap_drop=['ALL']`), no-new-privileges, read-only root filesystems, non-root user execution (UID 10001 / node), memory/CPU caps, and active HTTP health probing.
 - **Deterministic 0–10 Risk Engine**: Mathematical scoring factoring base CVSS, reachability, exposure context, and scanner confidence with clear rationale text.
 - **Evidence-Grounded AI Remediation**: OpenRouter LLM integration with prompt injection defenses, Pydantic validation, and human-in-the-loop diff approval.
 - **Enterprise Reporting**: OASIS SARIF 2.1.0, Machine JSON, CSV, and WeasyPrint PDF reports.
@@ -96,7 +96,7 @@ pip install pytest pytest-cov
 # Run migrations
 alembic upgrade head
 
-# Run complete test suite (41 tests)
+# Run complete test suite (76 tests: 75 passed, 1 skipped)
 PYTHONPATH=. python -m pytest tests/ -v
 ```
 

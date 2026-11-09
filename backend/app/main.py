@@ -22,6 +22,7 @@ from app.api.v1.router import api_router
 from app.core.config import get_settings
 from app.core.database import engine
 from app.core.logging import configure_logging, get_logger
+from app.core.rate_limiter import limiter
 
 settings = get_settings()
 logger = get_logger(__name__)
@@ -146,10 +147,13 @@ async def global_exception_handler(request: Request, exc: Exception):
 @app.get("/health", tags=["system"])
 def health_check():
     """Health check endpoint for container orchestrators and monitoring."""
+    rl_status = limiter.get_status()
+    overall_status = "healthy" if not rl_status.get("degraded") else "degraded"
     return {
-        "status": "healthy",
+        "status": overall_status,
         "service": "sentinelx-api",
         "environment": settings.APP_ENV,
+        "rate_limiter": rl_status,
         "timestamp": time.time(),
     }
 

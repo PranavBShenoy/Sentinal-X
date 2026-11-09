@@ -21,6 +21,7 @@
 12. [Comprehensive Technical Interview & Defense Q&A](#12-comprehensive-technical-interview--defense-qa)
 13. [Local Deployment, Operational Runbook & Verification](#13-local-deployment-operational-runbook--verification)
 14. [Advanced Scanner Integrations & Offline Resolutions: Grype, Semgrep, and OSV-Scanner](#14-advanced-scanner-integrations--offline-resolutions-grype-semgrep-and-osv-scanner)
+15. [Audit Remediation & Hardening: SEC-01, OPS-01, and INFRA-01](#15-audit-remediation--hardening-sec-01-ops-01-and-infra-01)
 
 ---
 
@@ -508,7 +509,7 @@ The verification suite exercises the complete lifecycle of a security assessment
 
 | Tool | Version | Mode | Target Fixture | Test Case | Status | Verified Findings |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **Gitleaks** | 8.18.4 | Local binary | `tests/fixtures/secret_leak` | `test_live_gitleaks_actual_binary_and_secret_masking` | **PASS** | AWS Key, Stripe Key (Masked) |
+| **Gitleaks** | 8.18.4 | Local binary | `tests/fixtures/secret_leak` | `test_live_gitleaks_actual_binary_and_secret_masking` | **PASS** | AWS Key, Generic API Key (Masked) |
 | **Trivy** | 0.57.1 | Local binary | `tests/fixtures/vuln_deps` | `test_live_trivy_vulnerability_detection` | **PASS** | CVE-2018-18074 on requests 2.6.0 |
 | **Zap / Native DAST** | 1.0.0 | HTTP server | Port 9877 | `test_live_native_dast_against_test_application` | **PASS** | Missing CSP, X-Content-Type, Server header |
 | **Reports Engine** | 1.0.0 | Real generator | Assessment DB | `test_report_generation_formats_integrity` | **PASS** | JSON, SARIF 2.1.0, CSV non-empty |
@@ -523,5 +524,80 @@ The verification suite exercises the complete lifecycle of a security assessment
 - **Database Hydration Schedules**: Both Anchore Grype DB v6 and Google OSV Scalibr databases are snapshots. In an air-gapped production deployment, an automated cron or synchronization pipeline must hydrate `~/.cache/grype/db/6/` and `~/.cache/osv-scalibr/` periodically to ingest zero-day advisories.
 - **Runtime MicroVM Isolation**: Docker container hardening (`cap_drop=['ALL']`, `security_opt=['no-new-privileges:true']`, `read_only=True`, cgroups memory/CPU limits) prevents user-space escapes. However, for untrusted multi-tenant code execution in production, hypervisor-level microVM isolation (such as AWS Firecracker or gVisor) is recommended over shared-kernel containers to protect against kernel privilege-escalation zero-days.
 - **Network Egress Safeguards**: When running outside strict sandbox boundaries, egress proxies must restrict scanner outbound network traffic to approved advisory endpoints only, preventing data exfiltration during dependency scanning.
+
+---
+
+## 15. AUDIT REMEDIATION & HARDENING: SEC-01, OPS-01, AND INFRA-01
+
+### 15.1 SEC-01: Comprehensive SSRF Engine & Safe Socket Transport
+
+#### 1. Vulnerability Analysis
+Prior to remediation, staging target URLs supplied by users during assessment creation were checked using naive hostname and string checks. This left the platform vulnerable to:
+- **DNS Rebinding**: An attacker registers a domain whose DNS server returns a public IP during initial validation (TTL=0) and resolves to `127.0.0.1` or `169.254.169.254` during the actual HTTP request.
+- **Alternative IP Encoding**: Decimal dwords (`2130706433`), octal strings (`0177.0.0.1`), hex numbers (`0x7f000001`), or IPv4-mapped IPv6 (`::ffff:127.0.0.1`) that bypass string-based prefix filters while resolving to internal subnets.
+- **Redirect Loops & Bypasses**: Initial validation of `https://example.com/` succeeds, but the server issues a 302 redirect to `http://169.254.169.254/latest/meta-data/`.
+- **Fail-Open DNS**: Failing DNS resolution allowed unresolvable hostnames through or raised uncaught exceptions that bypassed downstream checks.
+
+#### 2. Architecture & Implementation
+We implemented a dedicated security engine in [`backend/app/core/ssrf.py`](file:///home/pranav/Sentinal-X/backend/app/core/ssrf.py):
+- **Canonicalization**: `canonicalize_ip_representation()` parses decimal dwords, octal strings, hex notation, and unmaps IPv4-mapped IPv6 addresses.
+- **Exhaustive Prohibited Matrix**: `is_prohibited_ip()` validates against RFC 1122 Loopback (`127.0.0.0/8`, `::1`), RFC 1918 Private networks, RFC 4193 ULA (`fc00::/7`), RFC 3927 Link-Local (`169.254.0.0/16`, `fe80::/10`), RFC 6598 CGNAT (`100.64.0.0/10`), RFC 5737 Documentation subnets, Cloud Metadata endpoints, and enforces `ip.is_global`.
+- **Dual-Stack DNS & Fail-Closed**: `resolve_all_ip_addresses()` queries both A and AAAA records. If ANY record resolves to a non-public IP, the entire request is blocked. If DNS resolution fails, the engine fails closed.
+- **Pinned Socket Transport (`PinnedSSRFNetworkBackend`)**: Subclasses `httpcore.SyncBackend` to intercept `connect_tcp`. It resolves and validates the destination IP immediately before socket creation and connects directly to the pre-validated IP address, defeating DNS rebinding at the transport layer while preserving Host header and TLS SNI.
+- **Hop-by-Hop Redirect Validation (`SafeSSRFClient`)**: Disables automatic client redirects. Manually intercepts 3xx responses and re-validates the destination URL before following any hop.
+
+---
+
+### 15.2 OPS-01: Shared Atomic Redis Rate Limiting & Proxy Trust
+
+#### 1. Architectural Challenge
+In production, SENTINEL-X runs multiple FastAPI workers behind reverse proxies or load balancers. In-memory per-process rate limiters allow attackers to multiply their request budget by the number of worker processes. Furthermore, naive trust of `X-Forwarded-For` allows attackers to bypass rate limits simply by injecting randomized header values (`X-Forwarded-For: 1.2.3.4`).
+
+#### 2. Solution Implementation
+We implemented [`backend/app/core/rate_limiter.py`](file:///home/pranav/Sentinal-X/backend/app/core/rate_limiter.py):
+- **Redis Sliding Window via Atomic Lua Script**:
+  - `ZREMRANGEBYSCORE`: Removes requests outside the sliding window.
+  - `ZCARD`: Calculates the current window count atomically.
+  - `ZADD` + `EXPIRE`: Enters the new request with bounded key TTL.
+- **Client IP Extraction with Spoofing Defense**:
+  - Configurable `TRUSTED_PROXIES` in [`backend/app/core/config.py`](file:///home/pranav/Sentinal-X/backend/app/core/config.py).
+  - If direct socket peer (`request.client.host`) is NOT in `TRUSTED_PROXIES`, `X-Forwarded-For` is completely ignored.
+- **RFC 6585 Compliance**: Returns HTTP 429 with `Retry-After`, `X-RateLimit-Limit`, `X-RateLimit-Remaining: 0`, and `X-RateLimit-Reset`.
+- **Degraded Health Reporting**: Exposed in `/health` status endpoint.
+
+---
+
+### 15.3 INFRA-01: Hardened Container Runtime Isolation & Non-Root Users
+
+#### 1. Isolation Hardening
+The Docker orchestrator ([`backend/app/runtime/docker/orchestrator.py`](file:///home/pranav/Sentinal-X/backend/app/runtime/docker/orchestrator.py)) was hardened with strict containment flags:
+- `cap_drop=['ALL']`: Drops all Linux kernel capabilities.
+- `--security-opt=no-new-privileges:true`: Prevents privilege escalation via `setuid` binaries.
+- `--read-only`: Mounts root filesystem as read-only.
+- `--tmpfs=/tmp:rw,noexec,nosuid,size=64m`: Provides ephemeral scratch space with execution blocked.
+- Non-root user generation: Dockerfiles auto-inject `appuser` (UID 10001) for Python and `node` (UID 1000) for Node.js.
+- Bounded cgroups: 512MB RAM, 1 CPU quota, 100 max PIDs.
+
+#### 2. Production MicroVM Recommendation
+For multi-tenant SaaS environments where arbitrary user repositories are provisioned, shared-kernel Docker containers present a residual risk of kernel zero-day escapes. SENTINEL-X is designed to bridge to hypervisor-isolated microVM technologies:
+- **AWS Firecracker**: Hardware-isolated microVMs with sub-second launch latency and minimal device attack surface.
+- **Google gVisor (`runsc`)**: Syscall-intercepting user-space kernel acting as an application sandbox.
+
+---
+
+### 15.4 Deep Multi-Tenant IDOR/BOLA Protection Verification
+
+All resources across SENTINEL-X verify tenant boundaries via relational queries:
+`Project.owner_id == current_user.id`
+
+Verified in `backend/tests/integration/test_tenant_isolation_deep.py` across:
+1. Projects (CRUD): HTTP 403/404 on cross-user access.
+2. Repositories: HTTP 403/404 on cross-user repository attachment or listing.
+3. Assessments: HTTP 403/404 on create, read, trigger, or cancel.
+4. Findings: HTTP 403/404 on read or disposition updates; zero data leakage in global listings.
+5. SBOM & Dependency Graphs: HTTP 403/404 on artifact, component, or graph retrieval.
+6. Reports: HTTP 403/404 on generate, list, or download.
+7. Remediation Proposals: HTTP 403/404 on view, approve, or verify.
+
 
 

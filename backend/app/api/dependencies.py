@@ -30,63 +30,7 @@ logger = logging.getLogger(__name__)
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
 
 
-# ---------------------------------------------------------------------------
-# Rate limiter — in-memory per-IP, keyed by (ip, endpoint)
-# ---------------------------------------------------------------------------
-
-class _InMemoryRateLimiter:
-    """
-    Simple sliding-window rate limiter backed by a dict.
-    Thread-safety is best-effort; suitable for single-process dev.
-    For production multi-process deployments use a Redis-backed limiter.
-    """
-
-    def __init__(self) -> None:
-        self._windows: Dict[str, List[float]] = defaultdict(list)
-
-    def is_allowed(self, key: str, max_calls: int, window_seconds: int = 60) -> bool:
-        now = time.monotonic()
-        cutoff = now - window_seconds
-        calls = self._windows[key]
-        # Drop expired entries
-        calls[:] = [t for t in calls if t > cutoff]
-        if len(calls) >= max_calls:
-            return False
-        calls.append(now)
-        return True
-
-
-_limiter = _InMemoryRateLimiter()
-
-
-def rate_limit(
-    max_calls: int = 10,
-    window_seconds: int = 60,
-    endpoint_key: str = "default",
-):
-    """
-    Return a FastAPI dependency that enforces an IP-based rate limit.
-
-    Usage::
-
-        @router.post("/login")
-        def login(..., _rl=Depends(rate_limit(max_calls=10, endpoint_key="login"))):
-            ...
-    """
-    def _dependency(request: Request) -> None:
-        # Use X-Forwarded-For when behind a trusted proxy, else remote_addr.
-        ip = request.headers.get("X-Forwarded-For", request.client.host if request.client else "unknown")
-        # Take only the first IP if multiple are present.
-        ip = ip.split(",")[0].strip()
-        key = f"{endpoint_key}:{ip}"
-        if not _limiter.is_allowed(key, max_calls=max_calls, window_seconds=window_seconds):
-            raise HTTPException(
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail="Too many requests. Please slow down.",
-                headers={"Retry-After": str(window_seconds)},
-            )
-
-    return _dependency
+from app.core.rate_limiter import limiter, rate_limit
 
 
 # ---------------------------------------------------------------------------

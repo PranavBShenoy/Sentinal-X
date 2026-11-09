@@ -15,7 +15,7 @@ from uuid import UUID
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
-from app.api.dependencies import get_assessment_or_404, get_current_user, get_project_or_404
+from app.api.dependencies import get_assessment_or_404, get_current_user, get_project_or_404, rate_limit
 from app.core.database import get_db
 from app.models import (
     Assessment,
@@ -34,52 +34,9 @@ from app.schemas import (
     ScanJobResponse,
 )
 
+from app.core.ssrf import validate_target_url
+
 router = APIRouter(tags=["assessments"])
-
-
-def validate_target_url(target_url: str) -> None:
-    """
-    SSRF Defense: validate that target_url does not point to
-    loopback, link-local, cloud metadata, or private IP networks.
-    """
-    if not target_url:
-        return
-    parsed = urlparse(target_url)
-    if parsed.scheme not in ("http", "https"):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Target URL must use http:// or https:// scheme.",
-        )
-
-    hostname = parsed.hostname
-    if not hostname:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid target URL host.")
-
-    try:
-        # Resolve hostname to IP addresses
-        addr_info = socket.getaddrinfo(hostname, None)
-        ips = [info[4][0] for info in addr_info]
-    except Exception:
-        # If DNS cannot be resolved, allow or reject based on policy
-        return
-
-    for ip_str in ips:
-        ip = ipaddress.ip_address(ip_str)
-        if ip.is_loopback:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="SSRF Blocked: Scanning loopback addresses (127.0.0.1 / localhost) is prohibited.",
-            )
-        if ip.is_link_local or ip_str.startswith("169.254."):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="SSRF Blocked: Scanning cloud metadata addresses (169.254.169.254) is prohibited.",
-            )
-        if ip.is_multicast or ip.is_reserved:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="SSRF Blocked: Reserved / multicast IP address target is prohibited.",
-            )
 
 
 @router.post(
@@ -93,6 +50,7 @@ def create_assessment(
     project: Project = Depends(get_project_or_404),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
+    _rl: None = Depends(rate_limit(max_calls=15, window_seconds=60, endpoint_key="assessment_create")),
 ) -> AssessmentResponse:
     """Create a new security assessment configuration."""
     repo = (
