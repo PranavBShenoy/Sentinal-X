@@ -33,7 +33,7 @@ import ipaddress
 import re
 import socket
 import urllib.parse
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, List, Optional, Set, Tuple
 
 import httpcore
 import httpx

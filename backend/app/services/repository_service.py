@@ -9,14 +9,14 @@ from __future__ import annotations
 import os
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 from urllib.parse import urlparse
 
 from app.core.config import get_settings
 from app.core.database import db_session
 from app.core.logging import get_logger
 from app.core.subprocess_utils import run_command
-from app.models import Assessment, GitHubInstallation, Repository
+from app.models import Assessment, GitHubInstallation
 from app.runtime.detection.detector import ProjectDetector
 
 logger = get_logger(__name__)

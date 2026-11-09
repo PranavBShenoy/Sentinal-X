@@ -16,7 +16,6 @@ from typing import Any, Optional
 
 import bcrypt
 import jwt
-from jwt.exceptions import ExpiredSignatureError, InvalidTokenError
 
 from app.core.config import get_settings
 

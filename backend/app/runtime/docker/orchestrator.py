@@ -16,7 +16,6 @@ Enforces mandatory security controls:
 from __future__ import annotations
 
 import os
-import shutil
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -29,7 +28,7 @@ from app.core.database import db_session
 from app.core.logging import get_logger
 from app.core.secret_redactor import redact
 from app.core.subprocess_utils import run_command
-from app.models import Assessment, RuntimeEnvironment, RuntimeStatus
+from app.models import RuntimeEnvironment, RuntimeStatus
 from app.runtime.detection.detector import ProjectDetector, ProjectProfile
 
 logger = get_logger(__name__)
@@ -196,7 +195,6 @@ class RuntimeOrchestrator:
             if not env:
                 return
 
-            container_ids = env.container_ids or []
             network_id = env.network_id
 
         container_name = f"sentinelx-cont-{assessment_id.lower()[:12]}"

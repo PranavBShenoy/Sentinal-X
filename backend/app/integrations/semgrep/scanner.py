@@ -11,7 +11,6 @@ import hashlib
 import json
 import os
 import shutil
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -65,8 +64,6 @@ class SemgrepScanner:
         - Secret redaction in output and code snippets
         - Normalization to Finding models
         """
-        start_time = datetime.now(timezone.utc)
-
         # 1. Check tool availability
         if not self.is_available():
             msg = (
@@ -191,7 +188,7 @@ class SemgrepScanner:
 
         # Parse findings from results
         results = raw_data.get("results", [])
-        findings_created = self._persist_findings(
+        self._persist_findings(
             assessment_id=assessment_id,
             results=results,
             workspace_path=workspace_path,

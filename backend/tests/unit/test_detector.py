@@ -1,7 +1,6 @@
 """
 Unit tests for runtime project detection.
 """
-import os
 import tempfile
 from pathlib import Path
 

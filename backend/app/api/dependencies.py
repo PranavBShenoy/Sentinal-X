@@ -10,18 +10,16 @@ Provides:
 from __future__ import annotations
 
 import logging
-import time
-from collections import defaultdict
-from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from typing import Optional
 from uuid import UUID
 
-from fastapi import Depends, HTTPException, Request, status
+from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from jwt.exceptions import ExpiredSignatureError, InvalidTokenError
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.core.rate_limiter import limiter as limiter, rate_limit as rate_limit
 from app.core.security import decode_access_token
 from app.models.models import Assessment, Project, User
 
@@ -30,7 +28,6 @@ logger = logging.getLogger(__name__)
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
 
 
-from app.core.rate_limiter import limiter, rate_limit
 
 
 # ---------------------------------------------------------------------------

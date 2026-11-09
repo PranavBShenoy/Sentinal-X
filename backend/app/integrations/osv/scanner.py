@@ -202,7 +202,7 @@ class OSVScanner:
             return {"tool": "osv-scanner", "status": "FAILED", "check_status": "ERROR", "findings_count": 0, "error": msg}
 
         results = raw_data.get("results", [])
-        findings_created = self._persist_findings(
+        self._persist_findings(
             assessment_id=assessment_id,
             results=results,
         )

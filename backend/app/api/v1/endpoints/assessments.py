@@ -6,10 +6,6 @@ Enforces tenant isolation, input validation, and SSRF prevention on staging URLs
 """
 from __future__ import annotations
 
-import ipaddress
-import socket
-from typing import Any, Dict, List, Optional
-from urllib.parse import urlparse
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
@@ -112,12 +108,10 @@ def start_assessment(
     db.flush()
 
     # Attempt Celery task dispatch; if Redis/Celery is unavailable, run via FastAPI BackgroundTasks
-    dispatched = False
     try:
         from app.workers.assessment_tasks import run_assessment
         run_assessment.delay(str(assessment.id))
-        dispatched = True
-    except Exception as e:
+    except Exception:
         # Fallback to local background execution
         from app.services.assessment_pipeline import AssessmentPipeline
 
@@ -126,7 +120,6 @@ def start_assessment(
             pipeline.execute()
 
         background_tasks.add_task(_run_bg)
-        dispatched = True
 
     return AssessmentResponse.model_validate(assessment)
 

@@ -140,7 +140,7 @@ class RiskEngine:
                 # Peak risk with diminishing weight for lower items
                 weights = [0.4, 0.25, 0.15, 0.1, 0.1][:len(top_scores)]
                 norm_weights = [w / sum(weights) for w in weights]
-                overall_score = round(sum(s * w for s, w in zip(top_scores, norm_weights)), 1)
+                overall_score = round(sum(s * w for s, w in zip(top_scores, norm_weights, strict=True)), 1)
 
                 if overall_score >= 8.5:
                     risk_level = "CRITICAL"

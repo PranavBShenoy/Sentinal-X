@@ -1,8 +1,6 @@
 import os
 from pathlib import Path
-import pytest
 from app.models import (
-    User,
     Project,
     Repository,
     Assessment,

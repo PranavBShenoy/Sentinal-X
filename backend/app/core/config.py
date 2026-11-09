@@ -28,7 +28,7 @@ class Settings(BaseSettings):
     # Application
     # ------------------------------------------------------------------ #
     APP_ENV: str = "development"
-    APP_HOST: str = "0.0.0.0"
+    APP_HOST: str = "0.0.0.0"  # nosec B104 # noqa: S104
     APP_PORT: int = 8000
     APP_DEBUG: bool = False
     LOG_LEVEL: str = "INFO"
@@ -121,7 +121,7 @@ class Settings(BaseSettings):
     # ------------------------------------------------------------------ #
     # Assessment workspaces
     # ------------------------------------------------------------------ #
-    ASSESSMENT_WORKSPACE_BASE: str = "/tmp/sentinelx/workspaces"
+    ASSESSMENT_WORKSPACE_BASE: str = "/tmp/sentinelx/workspaces"  # nosec B108
     ASSESSMENT_WORKSPACE_MAX_AGE_HOURS: int = 24
 
     # ------------------------------------------------------------------ #

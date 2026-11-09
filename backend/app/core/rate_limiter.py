@@ -17,7 +17,7 @@ from __future__ import annotations
 import collections
 import time
 import uuid
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import redis
 from fastapi import HTTPException, Request, status

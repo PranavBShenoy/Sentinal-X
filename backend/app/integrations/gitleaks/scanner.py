@@ -273,6 +273,7 @@ class GitleaksScanner:
                         "author": item.get("Author"),
                         "date": item.get("Date"),
                         "masked_match": masked_match,
+                        "remediation_note": remediation_note,
                     },
                 )
                 db.add(finding)

@@ -6,11 +6,10 @@ to avoid unbounded disk usage while protecting active workspaces.
 """
 from __future__ import annotations
 
-import os
 import shutil
 import time
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Optional
 
 from app.core.config import get_settings
 from app.core.logging import get_logger

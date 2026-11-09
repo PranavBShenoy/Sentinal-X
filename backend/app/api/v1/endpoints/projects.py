@@ -3,9 +3,8 @@ Projects CRUD endpoints for SENTINEL-X.
 """
 from __future__ import annotations
 
-from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import get_current_user, get_project_or_404

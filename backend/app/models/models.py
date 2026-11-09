@@ -14,7 +14,6 @@ from __future__ import annotations
 import enum
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
 
 from sqlalchemy import (
     BigInteger,
@@ -29,7 +28,6 @@ from sqlalchemy import (
     JSON,
     String,
     Text,
-    UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import relationship

@@ -3,10 +3,10 @@ Software Bill of Materials (SBOM) and Dependency Graph API Endpoints.
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import List
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.analysis.dependency_graph.builder import DependencyGraphBuilder

@@ -164,7 +164,7 @@ class GrypeScanner:
             return {"tool": "grype", "status": "FAILED", "check_status": "ERROR", "findings_count": 0, "error": msg}
 
         matches = raw_data.get("matches", [])
-        findings_created = self._persist_findings(
+        self._persist_findings(
             assessment_id=assessment_id,
             matches=matches,
         )

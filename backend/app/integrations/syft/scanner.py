@@ -7,7 +7,6 @@ Outputs in standard CycloneDX JSON format and stores component records in the da
 from __future__ import annotations
 
 import json
-import os
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path

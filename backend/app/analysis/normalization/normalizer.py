@@ -7,14 +7,11 @@ Computes stable deduplication fingerprints across rescans.
 from __future__ import annotations
 
 import hashlib
-from typing import Any, Dict, List, Optional
+from typing import Optional
 
 from app.models import (
     ConfidenceLevel,
-    Finding,
-    FindingCategory,
     FindingSeverity,
-    FindingStatus,
 )
 
 

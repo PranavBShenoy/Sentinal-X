@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 import subprocess
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import List, Optional
 
 from app.core.secret_redactor import redact

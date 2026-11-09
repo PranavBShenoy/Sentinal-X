@@ -25,8 +25,6 @@ import pytest
 from app.core.ssrf import (
     SSRFValidationError,
     SafeSSRFClient,
-    canonicalize_ip_representation,
-    is_prohibited_ip,
     validate_target_url,
 )
 

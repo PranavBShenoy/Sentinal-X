@@ -16,13 +16,9 @@ Pipeline stages:
 """
 from __future__ import annotations
 
-import os
-import shutil
-import traceback
 from datetime import datetime, timezone
 from typing import Optional
 
-from celery import chain, chord, group
 from celery.utils.log import get_task_logger
 
 from app.core.config import get_settings

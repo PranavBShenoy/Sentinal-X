@@ -12,10 +12,8 @@ Enforces secret redaction: passwords, tokens, and raw keys are never placed in r
 from __future__ import annotations
 
 import csv
-import io
 import json
 import os
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -26,8 +24,6 @@ from app.core.secret_redactor import redact
 from app.models import (
     Assessment,
     Finding,
-    FindingCategory,
-    FindingSeverity,
     Report,
     RuntimeEnvironment,
     SbomArtifact,

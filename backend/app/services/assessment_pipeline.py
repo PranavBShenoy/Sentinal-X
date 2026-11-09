@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import os
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any, Dict, Optional
 
 from app.analysis.correlation.correlator import FindingCorrelator
@@ -163,7 +162,7 @@ class AssessmentPipeline:
             # -----------------------------------------------------------
             self._set_status(AssessmentStatus.DYNAMIC_TESTING, "DYNAMIC_TESTING")
             if target_url:
-                dast_res = self.zap.scan(self.assessment_id, target_url)
+                self.zap.scan(self.assessment_id, target_url)
             else:
                 logger.info("Skipping dynamic testing — no reachable runtime target")
                 # Record ScanJob as NOT_ASSESSED

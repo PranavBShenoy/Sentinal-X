@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.database import db_session
@@ -264,8 +265,8 @@ class OpenRouterClient:
                 f"security advisory {', '.join(finding.cve_ids or [finding.rule_id or ''])}."
             )
             impact = (
-                f"Vulnerabilities in third-party libraries may allow remote code execution, denial of service, "
-                f"or data leakage depending on whether the vulnerable function is reachable in the application."
+                "Vulnerabilities in third-party libraries may allow remote code execution, denial of service, "
+                "or data leakage depending on whether the vulnerable function is reachable in the application."
             )
             fix_target = finding.fixed_version or "latest patched version"
             steps = [

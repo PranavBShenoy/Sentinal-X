@@ -7,7 +7,7 @@ to vulnerable components, and prepares visualization payloads.
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Set
 
 import networkx as nx
 
@@ -56,7 +56,6 @@ class DependencyGraphBuilder:
         G.add_node(app_root, name="Application Root", type="root", vulnerable=False)
 
         comp_by_purl: Dict[str, SbomComponent] = {c.purl: c for c in components if c.purl}
-        comp_by_name: Dict[str, SbomComponent] = {c.name.lower(): c for c in components if c.name}
 
         # Identify vulnerable component names / purls
         vuln_pkg_names = {f.component.lower() for f in vulnerable_findings if f.component}

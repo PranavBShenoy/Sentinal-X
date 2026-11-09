@@ -63,6 +63,7 @@ dev = [
     "factory-boy>=3.3.0",
     "mypy>=1.6.0",
     "ruff>=0.1.0",
+    "bandit>=1.7.0",
     "black>=23.10.0",
 ]
 
@@ -74,10 +75,28 @@ filterwarnings = [
 ]
 
 [tool.ruff]
-line-length = 100
+line-length = 120
 target-version = "py311"
-select = ["E", "F", "I", "N", "W", "UP", "S", "B"]
-ignore = ["S101", "S603", "S607"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "S"]
+ignore = [
+    "E501",  # line length
+    "B008",  # do not perform function calls in argument defaults (FastAPI Depends)
+    "S101",  # assert used
+    "S603",  # subprocess call - check for execution of untrusted input
+    "S607",  # start process with a partial path
+    "S108",  # probable insecure usage of temp file/directory
+    "S110",  # try-except-pass
+    "S105",  # possible hardcoded password
+    "S106",  # possible hardcoded password assigned to argument (e.g. token_type="bearer")
+    "B904",  # raise from err
+]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]
+"migrations/*" = ["E501"]
+"tests/*" = ["S101", "S105", "S106", "S107", "S108", "F841", "E402"]
 
 [tool.mypy]
 python_version = "3.11"

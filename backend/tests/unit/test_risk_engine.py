@@ -7,7 +7,6 @@ from app.models import (
     Finding,
     FindingCategory,
     FindingSeverity,
-    FindingStatus,
 )
 
 

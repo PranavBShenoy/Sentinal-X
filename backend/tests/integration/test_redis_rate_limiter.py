@@ -9,11 +9,9 @@ Verifies:
 """
 from __future__ import annotations
 
-import time
 import uuid
 from fastapi import FastAPI, Depends, Request
 from fastapi.testclient import TestClient
-import pytest
 
 from app.core.rate_limiter import RedisRateLimiter, rate_limit, limiter
 

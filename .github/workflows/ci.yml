@@ -1,10 +1,16 @@
 name: SENTINEL-X CI Pipeline
 
-on:
+"on":
   push:
-    branches: [ main, master ]
+    branches:
+      - main
+      - master
+      - fix/security-hardening-audit
   pull_request:
-    branches: [ main, master ]
+    branches:
+      - main
+      - master
+  workflow_dispatch:
 
 jobs:
   backend-test:
@@ -28,44 +34,68 @@ jobs:
         options: --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 5s --health-retries 5
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: "pip"
+          cache-dependency-path: backend/pyproject.toml
 
       - name: Install dependencies
         working-directory: ./backend
         run: |
           python -m pip install --upgrade pip
-          pip install .
-          pip install pytest pytest-cov ruff bandit
+          pip install ".[dev]"
 
       - name: Lint and Format Check (Ruff)
         working-directory: ./backend
         run: |
-          ruff check . || true
+          ruff check .
 
       - name: Static Security Scan (Bandit)
         working-directory: ./backend
         run: |
-          bandit -r app/ -ll -ii || true
+          bandit -r app/ -ll -ii
 
-      - name: Database Migrations Check
+      - name: Verify PostgreSQL Schema Migrations
         working-directory: ./backend
         env:
-          DATABASE_URL: sqlite:////tmp/sentinelx_ci.db
+          DATABASE_URL: postgresql+psycopg2://sentinelx:sentinelx_test_password@localhost:5432/sentinelx_test
         run: |
-          alembic upgrade head
+          python -m alembic upgrade head
+
+      - name: Verify PostgreSQL & Redis Service Connectivity
+        working-directory: ./backend
+        env:
+          DATABASE_URL: postgresql+psycopg2://sentinelx:sentinelx_test_password@localhost:5432/sentinelx_test
+          REDIS_URL: redis://localhost:6379/0
+        run: |
+          python -c "
+          import redis
+          from sqlalchemy import create_engine, text
+
+          # Verify Redis service
+          r = redis.from_url('redis://localhost:6379/0', socket_timeout=5)
+          assert r.ping() is True
+          r.set('ci_health_check', 'ok', ex=10)
+          assert r.get('ci_health_check') == b'ok'
+          print('Redis service connectivity verified successfully.')
+
+          # Verify PostgreSQL migrated schema
+          engine = create_engine('postgresql+psycopg2://sentinelx:sentinelx_test_password@localhost:5432/sentinelx_test')
+          with engine.connect() as conn:
+              table_count = conn.execute(text(\"SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public';\")).scalar()
+              assert table_count > 0, 'No migrated tables found in PostgreSQL'
+              print(f'PostgreSQL schema verified successfully ({table_count} tables found).')
+          "
 
       - name: Run Pytest Test Suite
         working-directory: ./backend
         env:
           DATABASE_URL: sqlite:////tmp/sentinelx_ci_test.db
-          JWT_SECRET_KEY: test_secret_key_for_ci_pipeline_32bytes!
-          ENCRYPTION_KEY: dGhpcy1pcy1hLTMyLWJ5dGUtc2VjcmV0LWtleS0xMjM0NTY=
         run: |
           PYTHONPATH=. python -m pytest tests/ -v
 
@@ -73,7 +103,8 @@ jobs:
     name: Frontend Lint & Build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
       - name: Set up Node.js
         uses: actions/setup-node@v4

@@ -17,14 +17,14 @@ import hashlib
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urlparse
 
 import httpx
 
 from app.core.config import get_settings
 from app.core.database import db_session
 from app.core.logging import get_logger
-from app.core.ssrf import SafeSSRFClient, validate_target_url
+from app.core.ssrf import SafeSSRFClient
 from app.models import (
     CheckStatus,
     ConfidenceLevel,
@@ -88,11 +88,9 @@ class ZapScanner:
             }
 
         # Validate target_url reachability using SafeSSRFClient
-        target_accessible = False
         try:
             with SafeSSRFClient(allow_internal_runtime=True, timeout=10, verify=False) as client:
-                resp = client.get(target_url)
-                target_accessible = True
+                client.get(target_url)
         except Exception as e:
             msg = f"Target URL '{target_url}' is unreachable from DAST worker: {str(e)}"
             logger.warning("DAST target unreachable", target=target_url, error=str(e))
@@ -165,7 +163,6 @@ class ZapScanner:
             with SafeSSRFClient(allow_internal_runtime=True, timeout=15, verify=False, max_redirects=5) as client:
                 res = client.get(target_url)
                 headers = {k.lower(): v for k, v in res.headers.items()}
-                cookies = res.cookies
 
                 # 1. Missing Security Headers
                 sec_header_findings = self._check_security_headers(assessment_id, target_url, headers)
@@ -384,6 +381,28 @@ class ZapScanner:
                     )
                 )
 
+            if not has_samesite:
+                fp = hashlib.sha256(f"dast:cookie:samesite:{cookie_name}:{target_url}".encode()).hexdigest()
+                findings.append(
+                    Finding(
+                        assessment_id=assessment_id,
+                        fingerprint=fp,
+                        title=f"Cookie '{cookie_name}' Missing SameSite Attribute",
+                        description=(
+                            f"The cookie '{cookie_name}' lacks the 'SameSite' attribute. "
+                            "Without SameSite (Strict or Lax), the cookie is vulnerable to Cross-Site Request Forgery (CSRF)."
+                        ),
+                        category=FindingCategory.DAST,
+                        subcategory="INSECURE_COOKIE",
+                        severity=FindingSeverity.LOW,
+                        status=FindingStatus.OPEN,
+                        confidence=ConfidenceLevel.HIGH,
+                        source_tool="dast",
+                        rule_id="SEC-COOKIE-SAMESITE",
+                        endpoint=target_url,
+                    )
+                )
+
         return findings
 
     def _check_cors_policy(self, assessment_id: str, target_url: str, client: httpx.Client) -> List[Finding]:
@@ -525,7 +544,8 @@ class ZapScanner:
                                 endpoint=probe_url,
                             )
                         )
-            except Exception:
+            except Exception as e:
+                logger.debug("Failed sensitive file probe against %s: %s", probe_url, e)
                 continue
 
         return findings

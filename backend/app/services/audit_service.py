@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import logging
 from typing import Any, Dict, Optional
-from uuid import UUID
 
 from sqlalchemy.orm import Session
 

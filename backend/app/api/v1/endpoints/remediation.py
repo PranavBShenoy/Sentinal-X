@@ -17,12 +17,10 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import get_assessment_or_404, get_current_user
-from app.api.v1.endpoints.findings import get_finding_or_404
 from app.core.database import get_db
 from app.integrations.openrouter.client import OpenRouterClient
 from app.models import (
     Assessment,
-    Finding,
     Project,
     RemediationProposal,
     RemediationStatus,

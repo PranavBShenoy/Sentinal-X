@@ -24,11 +24,9 @@ from app.models import (
     FindingCategory,
     FindingSeverity,
     FindingStatus,
-    Project,
     RemediationProposal,
     RemediationStatus,
     Report,
-    Repository,
     SbomArtifact,
     SbomComponent,
 )

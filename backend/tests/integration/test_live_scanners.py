@@ -10,7 +10,6 @@ import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
-import pytest
 from app.integrations.gitleaks.scanner import GitleaksScanner
 from app.integrations.grype.scanner import GrypeScanner
 from app.integrations.osv.scanner import OSVScanner
@@ -29,7 +28,6 @@ from app.models import (
     FindingStatus,
     Project,
     Repository,
-    ScanJob,
     ScanJobStatus,
 )
 from app.reporting.generator import ReportGenerator

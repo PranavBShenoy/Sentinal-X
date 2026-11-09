@@ -20,7 +20,6 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.api.v1.router import api_router
 from app.core.config import get_settings
-from app.core.database import engine
 from app.core.logging import configure_logging, get_logger
 from app.core.rate_limiter import limiter
 

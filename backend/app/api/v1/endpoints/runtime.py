@@ -6,7 +6,6 @@ and safe diagnostic container logs with secrets redacted.
 """
 from __future__ import annotations
 
-from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session

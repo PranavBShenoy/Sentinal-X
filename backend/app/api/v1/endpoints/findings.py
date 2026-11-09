@@ -5,7 +5,7 @@ Provides search, filtering, pagination, and status updates for security findings
 """
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -17,8 +17,6 @@ from app.core.database import get_db
 from app.models import (
     Assessment,
     Finding,
-    FindingCategory,
-    FindingSeverity,
     FindingStatus,
     Project,
     User,

@@ -151,7 +151,6 @@ class GitHubService:
         Requires GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY_PATH to be set.
         """
         import jwt as pyjwt
-        import os
 
         app_id = settings.GITHUB_APP_ID
         key_path = settings.GITHUB_APP_PRIVATE_KEY_PATH
