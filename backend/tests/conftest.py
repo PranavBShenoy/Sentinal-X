@@ -34,6 +34,21 @@ database.SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=tes
 Base.metadata.create_all(bind=test_engine)
 
 
+@pytest.fixture(autouse=True)
+def reset_rate_limits():
+    """Reset rate limiter state before each test to prevent 429 rate limit interference."""
+    from app.core.rate_limiter import limiter
+    limiter._memory_fallback.clear()
+    if limiter._redis_client is not None:
+        try:
+            keys = limiter._redis_client.keys("sentinelx:ratelimit:*")
+            if keys:
+                limiter._redis_client.delete(*keys)
+        except Exception:
+            pass
+    yield
+
+
 @pytest.fixture(scope="session", autouse=True)
 def setup_test_db():
     Base.metadata.create_all(bind=test_engine)

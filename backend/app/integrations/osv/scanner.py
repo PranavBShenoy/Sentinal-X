@@ -134,8 +134,8 @@ class OSVScanner:
 
         combined_output = sub_res.stdout + sub_res.stderr
 
-        # Handle exit code 128: distinguish genuine missing manifest vs extraction errors
-        if sub_res.exit_code == 128:
+        # Handle non-standard exit codes
+        if sub_res.exit_code not in (0, 1):
             if "Error during extraction" in combined_output or "could not extract" in combined_output:
                 msg = f"OSV-Scanner failed to extract package manifest: {combined_output[:300].strip()}"
                 logger.error("OSV extraction failure", error=msg)
@@ -149,7 +149,7 @@ class OSVScanner:
                     tool_version=version,
                 )
                 return {"tool": "osv-scanner", "status": "FAILED", "check_status": "ERROR", "findings_count": 0, "error": msg}
-            elif "No package sources found" in combined_output:
+            elif sub_res.exit_code == 128 and "No package sources found" in combined_output:
                 logger.info("OSV-Scanner found no package sources in target", target=target_path)
                 self._record_scan_result(
                     assessment_id=assessment_id,
@@ -167,6 +167,19 @@ class OSVScanner:
                     "findings_count": 0,
                     "version": version,
                 }
+            else:
+                msg = f"OSV-Scanner execution failed (exit code {sub_res.exit_code}): {combined_output[:300].strip()}"
+                logger.error("OSV execution failure", error=msg)
+                self._record_scan_result(
+                    assessment_id=assessment_id,
+                    scan_job_id=scan_job_id,
+                    status=ScanJobStatus.FAILED,
+                    check_status=CheckStatus.ERROR,
+                    error_message=msg,
+                    execution_time=exec_duration,
+                    tool_version=version,
+                )
+                return {"tool": "osv-scanner", "status": "FAILED", "check_status": "ERROR", "findings_count": 0, "error": msg}
 
         raw_data: Dict[str, Any] = {}
         if output_file.exists():
@@ -188,8 +201,9 @@ class OSVScanner:
                     tool_version=version,
                 )
                 return {"tool": "osv-scanner", "status": "FAILED", "check_status": "ERROR", "findings_count": 0, "error": msg}
-        elif sub_res.exit_code not in (0, 1):
-            msg = f"OSV-Scanner execution failed (exit code {sub_res.exit_code}): {(sub_res.stdout + sub_res.stderr)[:300]}"
+        else:
+            msg = f"OSV-Scanner output file not found at {output_file}"
+            logger.error("OSV output file missing", path=str(output_file))
             self._record_scan_result(
                 assessment_id=assessment_id,
                 scan_job_id=scan_job_id,

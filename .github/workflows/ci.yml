@@ -105,6 +105,8 @@ jobs:
           grype db update
           # 5. OSV-Scanner (v2.7.1)
           sudo curl -sSL -o /usr/local/bin/osv-scanner https://github.com/google/osv-scanner/releases/download/v2.7.1/osv-scanner_linux_amd64 && sudo chmod +x /usr/local/bin/osv-scanner
+          mkdir -p ~/.cache/osv-scalibr/PyPI
+          curl -sSL -o ~/.cache/osv-scalibr/PyPI/all.zip https://osv-vulnerabilities.storage.googleapis.com/PyPI/all.zip
           # 6. Semgrep
           pip install semgrep
 
