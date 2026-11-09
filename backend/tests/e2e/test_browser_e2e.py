@@ -42,12 +42,26 @@ if not HAS_SELENIUM:
     pytest.skip("selenium is not installed", allow_module_level=True)
 
 
-
 def is_browser_available() -> bool:
     """Check if Chromium and chromedriver are available in the system."""
     chrome_bin = shutil.which("chromium") or shutil.which("chromium-browser") or shutil.which("google-chrome")
     driver_bin = shutil.which("chromedriver")
     return bool(chrome_bin and driver_bin)
+
+
+def is_frontend_built() -> bool:
+    """Check if frontend production build exists for Vite preview."""
+    workspace_root = Path(__file__).resolve().parent.parent.parent.parent
+    index_html = workspace_root / "frontend" / "dist" / "index.html"
+    return index_html.is_file()
+
+
+if not is_browser_available():
+    pytest.skip("Chromium or chromedriver is not available in this environment", allow_module_level=True)
+
+if not is_frontend_built():
+    pytest.skip("Built frontend (frontend/dist/index.html) is not available", allow_module_level=True)
+
 
 
 def is_port_in_use(port: int) -> bool:
