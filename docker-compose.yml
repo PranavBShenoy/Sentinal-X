@@ -65,6 +65,10 @@ services:
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
       - OPENROUTER_MODEL=${OPENROUTER_MODEL:-anthropic/claude-3.5-sonnet}
       - CORS_ORIGINS=${CORS_ORIGINS:-["http://localhost:3000","http://127.0.0.1:3000","http://localhost:8000"]}
+      # API talks to the runtime broker for cleanup on assessment cancellation.
+      - BROKER_URL=${BROKER_URL:-http://broker:8001}
+      - BROKER_API_KEY=${BROKER_API_KEY:-change-me-in-production}
+      - BROKER_AUTH_REQUIRED=${BROKER_AUTH_REQUIRED:-true}
     depends_on:
       postgres:
         condition: service_healthy
@@ -96,26 +100,57 @@ services:
       - ENCRYPTION_KEY=${ENCRYPTION_KEY:-dGhpcy1pcy1hLTMyLWJ5dGUtc2VjcmV0LWtleS0xMjM0NTY=}
       - LLM_PROVIDER=${LLM_PROVIDER:-openrouter}
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      # The worker does NOT mount the Docker socket. It talks to the runtime
+      # broker over authenticated HTTP. BROKER_API_KEY must match the broker's.
+      - BROKER_URL=${BROKER_URL:-http://broker:8001}
+      - BROKER_API_KEY=${BROKER_API_KEY:-change-me-in-production}
+      - BROKER_AUTH_REQUIRED=${BROKER_AUTH_REQUIRED:-true}
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+      broker:
+        condition: service_healthy
     volumes:
-      # [!WARNING] PRIVILEGE BOUNDARY RISK
-      # The worker mounts the host Docker socket so it can build and run
-      # ephemeral target containers. A compromised worker gains full control
-      # over the host Docker daemon (container escape / host compromise).
-      #
-      # Do NOT remove this mount without first deploying an isolated runtime
-      # host or a Docker socket proxy (e.g. docker-socket-proxy) that
-      # whitelists only the container/network operations the worker needs.
-      # See docs/operations/DOCKER_AND_RUNTIME.md — "Docker Socket Privilege
-      # Boundary Risk & Migration Path".
-      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # The worker intentionally does NOT mount /var/run/docker.sock.
+      # All Docker operations go through the authenticated runtime broker.
       - ./rules:/app/rules:ro
       - workspace_data:/var/lib/sentinelx/workspaces
       - reports_data:/var/lib/sentinelx/reports
+    networks:
+      - sentinelx-internal
+
+  # ---------------------------------------------------------------------------
+  # Runtime Broker — policy-enforcing Docker boundary.
+  # Holds the Docker socket; worker and API talk to it over authenticated HTTP.
+  # ---------------------------------------------------------------------------
+  broker:
+    build:
+      context: ./backend
+      dockerfile: ../infrastructure/docker/Dockerfile.broker
+    container_name: sentinelx-broker
+    restart: unless-stopped
+    environment:
+      - ENVIRONMENT=${ENVIRONMENT:-development}
+      - BROKER_API_KEY=${BROKER_API_KEY:-change-me-in-production}
+      - BROKER_AUTH_REQUIRED=${BROKER_AUTH_REQUIRED:-true}
+      - ASSESSMENT_WORKSPACE_BASE=${ASSESSMENT_WORKSPACE_BASE:-/var/lib/sentinelx/workspaces}
+      - BUILD_NETWORK_MODE=${BUILD_NETWORK_MODE:-none}
+      - BROKER_MEMORY_LIMIT=${BROKER_MEMORY_LIMIT:-512m}
+      - BROKER_CPUS=${BROKER_CPUS:-1.0}
+      - BROKER_PIDS_LIMIT=${BROKER_PIDS_LIMIT:-100}
+    ports:
+      # Loopback-only: the broker is consumed by same-host workers/api only.
+      - "127.0.0.1:8001:8001"
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      # [!WARNING] The broker is the ONLY service with host Docker socket access.
+      # It is a trusted policy-enforcement component. Mount read-only.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./rules:/app/rules:ro
     networks:
       - sentinelx-internal
 

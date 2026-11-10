@@ -138,6 +138,21 @@ class Settings(BaseSettings):
     DYNAMIC_TEST_TIMEOUT_SECONDS: int = 180
 
     # ------------------------------------------------------------------ #
+    # Runtime Broker (constrained Docker policy enforcement)
+    # ------------------------------------------------------------------ #
+    BROKER_URL: str = "http://localhost:8001"
+    BROKER_API_KEY: str = ""
+    BROKER_AUTH_REQUIRED: bool = True
+    # Build-time network mode: "none" (no outbound) or "internal" (isolated bridge).
+    # Never "host" — the default bridge provides no outbound isolation by itself.
+    BUILD_NETWORK_MODE: str = "none"
+    # Container resource limits enforced by the broker (never overridden by caller)
+    BROKER_MEMORY_LIMIT: str = "512m"
+    BROKER_CPUS: str = "1.0"
+    BROKER_PIDS_LIMIT: int = 100
+    BROKER_TMPFS_SIZE: str = "64m"
+
+    # ------------------------------------------------------------------ #
     # Rate limiting
     # ------------------------------------------------------------------ #
     RATE_LIMIT_REQUESTS_PER_MINUTE: int = 60

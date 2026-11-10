@@ -1,0 +1,55 @@
+# Dockerfile for SENTINEL-X Runtime Broker.
+#
+# The broker is a TRUSTED policy-enforcement component that holds the host
+# Docker socket. It runs a narrow FastAPI service exposing only the Docker
+# operations required by the Celery worker. It does NOT install security
+# scanners (those run in the worker container).
+#
+# Multi-stage: install runtime deps in builder, copy to slim runner.
+
+FROM python:3.11-slim as builder
+
+WORKDIR /build
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    libpq-dev \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY pyproject.toml .
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir .
+
+FROM python:3.11-slim as runner
+
+WORKDIR /app
+
+# docker CLI is required to execute container/network/image operations.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    docker.io \
+    libpq5 \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
+COPY --from=builder /usr/local/bin /usr/local/bin
+
+COPY app /app/app
+COPY migrations /app/migrations
+COPY alembic.ini /app/alembic.ini
+
+# Broker runs as non-root where possible; it needs socket access which is
+# granted via the compose volume mount, not via container privileges.
+RUN groupadd -r sentinelx && useradd -r -g sentinelx -s /bin/false sentinelx && \
+    mkdir -p /var/lib/sentinelx/workspaces /var/lib/sentinelx/reports && \
+    chown -R sentinelx:sentinelx /app /var/lib/sentinelx
+
+USER sentinelx
+
+EXPOSE 8001
+
+HEALTHCHECK --interval=10s --timeout=5s --start-period=10s --retries=3 \
+    CMD curl -f http://localhost:8001/v1/broker/health || exit 1
+
+CMD ["python", "-m", "app.runtime.broker.server"]

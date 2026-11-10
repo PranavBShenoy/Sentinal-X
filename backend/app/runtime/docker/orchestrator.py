@@ -4,15 +4,21 @@ Docker Runtime Orchestrator for Assessed Applications.
 Provisions, isolates, health-checks, and cleans up temporary Docker environments
 for supported applications (FastAPI, Flask, Express, Next.js, React).
 
-Enforces mandatory security controls:
-- cap_drop=["ALL"] (drops all Linux capabilities)
-- privileged=False (never privileged)
-- Memory and CPU limits
-- Isolated network per assessment
-- Never passes platform secrets or control plane credentials into container
-- Safe log capture with secret redaction
-- Automatic cleanup on completion or failure
+SECURITY ARCHITECTURE (INFRA-01):
+- This orchestrator does NOT touch the Docker socket directly.
+- All Docker operations delegate to the SENTINEL-X Runtime Broker
+  (app.runtime.broker), which holds the socket and enforces a strict
+  security policy on every request.
+- The broker enforces: cap_drop=ALL, no-new-privileges, read-only rootfs,
+  non-root execution, CPU/memory/pids limits, 127.0.0.1-only port binding,
+  --internal network, no host mounts, no host networking, no exec.
+- If the broker is unavailable, provisioning fails closed (no insecure
+  direct-docker fallback).
+
+Public interface is preserved: provision(), cleanup(), is_docker_available().
+Internal Docker helpers delegate to the broker.
 """
+
 from __future__ import annotations
 
 import os
@@ -26,9 +32,8 @@ import httpx
 from app.core.config import get_settings
 from app.core.database import db_session
 from app.core.logging import get_logger
-from app.core.secret_redactor import redact
-from app.core.subprocess_utils import run_command
 from app.models import RuntimeEnvironment, RuntimeStatus
+from app.runtime.broker.client import BrokerClient
 from app.runtime.detection.detector import ProjectDetector, ProjectProfile
 
 logger = get_logger(__name__)
@@ -36,36 +41,44 @@ settings = get_settings()
 
 
 class RuntimeOrchestrator:
-    """Manages the lifecycle of isolated Docker runtimes for security assessments."""
+    """Manages the lifecycle of isolated Docker runtimes for security assessments.
+
+    All Docker operations are delegated to the Runtime Broker. The orchestrator
+    retains ownership of the provisioning workflow, state tracking, and health
+    checking, but never invokes the Docker CLI or socket directly.
+    """
 
     def __init__(self) -> None:
         self.detector = ProjectDetector()
+        self.broker = BrokerClient()
 
     def is_docker_available(self) -> bool:
-        """Check if Docker CLI / daemon is accessible."""
-        res = run_command(["docker", "info"], timeout_seconds=5, tool_name="docker-check")
-        return res.succeeded
+        """Return True if the Runtime Broker is reachable and Docker is available."""
+        return self.broker.is_available()
 
     def provision(self, assessment_id: str, workspace_path: str) -> Dict[str, Any]:
         """
         Main entry point: detect project, build container, start, and run health check.
 
-        Always records outcome in RuntimeEnvironment model.
-        Returns dictionary with runtime status and reachable target URL (if running).
+        All Docker operations delegate to the broker. Always records outcome in
+        RuntimeEnvironment model. Returns dictionary with runtime status and
+        reachable target URL (if running).
+
+        Fails closed when the broker is unavailable.
         """
         logger.info("Starting runtime provisioning", assessment_id=assessment_id)
 
         # 1. Initialize or get RuntimeEnvironment in DB
         self._ensure_runtime_record(assessment_id)
 
-        # 2. Check Docker availability
+        # 2. Check broker / Docker availability
         if not self.is_docker_available():
-            msg = "Docker daemon is not accessible or not running in this environment."
-            logger.warning("Docker unavailable for runtime provisioning", assessment_id=assessment_id)
+            msg = "Runtime broker is not reachable or Docker is unavailable."
+            logger.warning("Docker broker unavailable for runtime provisioning", assessment_id=assessment_id)
             self._update_runtime_status(
                 assessment_id=assessment_id,
                 status=RuntimeStatus.FAILED,
-                failure_stage="DOCKER_CHECK",
+                failure_stage="BROKER_CHECK",
                 failure_reason=msg,
             )
             return {"status": RuntimeStatus.FAILED.value, "target_url": None, "error": msg}
@@ -91,7 +104,6 @@ class RuntimeOrchestrator:
         if profile.required_env_vars:
             missing_vars = [v for v in profile.required_env_vars if v not in os.environ]
             if missing_vars:
-                # Note missing environment variables but proceed if sensible defaults exist
                 logger.info(
                     "Detected environment variable dependencies",
                     missing=missing_vars,
@@ -108,17 +120,17 @@ class RuntimeOrchestrator:
         container_name = f"sentinelx-cont-{assessment_id.lower()[:12]}"
         network_name = f"sentinelx-net-{assessment_id.lower()[:12]}"
 
-        # 5. Build Docker Image
+        # 5. Build Docker Image (via broker)
         try:
             build_ok, build_log = self._build_image(workspace_path, profile, image_tag)
         except Exception as exc:
-            logger.exception("Docker build raised an exception", assessment_id=assessment_id, error=str(exc))
+            logger.exception("Broker build call raised an exception", assessment_id=assessment_id, error=str(exc))
             self._cleanup_resources(container_name, network_name, image_tag)
             self._update_runtime_status(
                 assessment_id=assessment_id,
                 status=RuntimeStatus.FAILED,
                 failure_stage="IMAGE_BUILD",
-                failure_reason=f"Docker build raised an exception: {exc}",
+                failure_reason=f"Broker build call raised an exception: {exc}",
             )
             return {"status": RuntimeStatus.FAILED.value, "target_url": None, "error": "Build failed"}
 
@@ -127,35 +139,39 @@ class RuntimeOrchestrator:
                 assessment_id=assessment_id,
                 status=RuntimeStatus.FAILED,
                 failure_stage="IMAGE_BUILD",
-                failure_reason=f"Docker build failed: {build_log[:300]}",
+                failure_reason=f"Docker image build failed: {build_log[:300]}",
                 safe_log_summary=build_log,
             )
-            # A failed build may leave a partial/intermediate image behind; clean it up.
+            # A failed build may leave a partial image behind; clean it up via broker.
             self._cleanup_resources(container_name, network_name, image_tag)
             return {"status": RuntimeStatus.FAILED.value, "target_url": None, "error": "Build failed"}
 
-        # 6. Start Container with Security Constraints
+        # 6. Start Container with Security Constraints (via broker)
         self._update_runtime_status(assessment_id=assessment_id, status=RuntimeStatus.STARTING)
 
+        app_port = profile.port or 8000
+        host_port = self._find_available_port()
+
         try:
-            start_ok, host_port, start_log = self._start_container(
+            start_ok, broker_host_port, start_log = self._start_container(
                 container_name=container_name,
                 network_name=network_name,
                 image_tag=image_tag,
-                profile=profile,
+                app_port=app_port,
+                host_port=host_port,
             )
         except Exception as exc:
-            logger.exception("Container start raised an exception", assessment_id=assessment_id, error=str(exc))
+            logger.exception("Broker container run raised an exception", assessment_id=assessment_id, error=str(exc))
             self._cleanup_resources(container_name, network_name, image_tag)
             self._update_runtime_status(
                 assessment_id=assessment_id,
                 status=RuntimeStatus.FAILED,
                 failure_stage="CONTAINER_START",
-                failure_reason=f"Container start raised an exception: {exc}",
+                failure_reason=f"Broker container run raised an exception: {exc}",
             )
             return {"status": RuntimeStatus.FAILED.value, "target_url": None, "error": "Start failed"}
 
-        if not start_ok or not host_port:
+        if not start_ok or broker_host_port is None:
             self._update_runtime_status(
                 assessment_id=assessment_id,
                 status=RuntimeStatus.FAILED,
@@ -166,9 +182,11 @@ class RuntimeOrchestrator:
             self._cleanup_resources(container_name, network_name, image_tag)
             return {"status": RuntimeStatus.FAILED.value, "target_url": None, "error": "Start failed"}
 
+        # Use the port returned by the broker (bound to 127.0.0.1 only).
+        host_port = broker_host_port
         target_url = f"http://127.0.0.1:{host_port}"
 
-        # 7. Health Check
+        # 7. Health Check (direct HTTP to the container's published loopback port)
         try:
             health_ok = self._health_check(target_url, timeout_seconds=30)
             logs = self._get_container_logs(container_name)
@@ -223,7 +241,7 @@ class RuntimeOrchestrator:
         }
 
     def cleanup(self, assessment_id: str) -> None:
-        """Stop and remove all containers and networks for an assessment."""
+        """Stop and remove all containers and networks for an assessment (via broker)."""
         network_id = None
         with db_session() as db:
             env = (
@@ -246,95 +264,8 @@ class RuntimeOrchestrator:
         )
 
     # ---------------------------------------------------------------------------
-    # Docker Execution Helpers
+    # Docker helpers — delegate to the Runtime Broker
     # ---------------------------------------------------------------------------
-
-    def _build_image(self, workspace_path: str, profile: ProjectProfile, image_tag: str) -> Tuple[bool, str]:
-        """Build image using either existing Dockerfile or generated safe Dockerfile."""
-        dockerfile_path = Path(workspace_path) / "Dockerfile"
-        generated_dockerfile = False
-
-        if not dockerfile_path.exists():
-            # Generate a minimal, non-privileged Dockerfile appropriate for the framework
-            generated_content = self._generate_dockerfile(profile)
-            with open(dockerfile_path, "w", encoding="utf-8") as f:
-                f.write(generated_content)
-            generated_dockerfile = True
-
-        args = [
-            "docker",
-            "build",
-            "-t",
-            image_tag,
-            str(workspace_path),
-        ]
-
-        res = run_command(args, timeout_seconds=180, tool_name="docker-build", cwd=workspace_path)
-
-        if generated_dockerfile and dockerfile_path.exists():
-            try:
-                dockerfile_path.unlink()
-            except Exception:
-                pass
-
-        safe_log = redact(res.stdout + "\n" + res.stderr)
-        return res.succeeded, safe_log
-
-    def _start_container(
-        self,
-        container_name: str,
-        network_name: str,
-        image_tag: str,
-        profile: ProjectProfile,
-    ) -> Tuple[bool, Optional[int], str]:
-        """Start container with strictly enforced isolation boundaries."""
-        # Clean up any leftover container with the same name first
-        run_command(["docker", "rm", "-f", container_name], timeout_seconds=10, tool_name="docker-rm-stale")
-        # Ensure dedicated isolated internal network (no external outbound internet or metadata egress)
-        run_command(["docker", "network", "rm", network_name], timeout_seconds=10, tool_name="docker-net-rm-stale")
-        net_res = run_command(["docker", "network", "create", "--internal", network_name], timeout_seconds=10, tool_name="docker-net-create")
-        if not net_res.succeeded:
-            safe_err = redact(net_res.stdout + "\n" + net_res.stderr)
-            return False, None, f"Failed to create isolated internal network: {safe_err[:300]}"
-
-        app_port = profile.port or 8000
-        # Map to an available dynamic host port
-        host_port = self._find_available_port()
-
-        # STRICT ISOLATION CONTROLS:
-        # - network=<network_name> (--internal prevents all outbound egress to LAN/WAN/metadata)
-        # - cap-drop=ALL (drop all Linux kernel capabilities)
-        # - security-opt=no-new-privileges:true (prevent setuid privilege escalation)
-        # - memory=512m (RAM limit against resource exhaustion)
-        # - cpus=1.0 (CPU quota limit)
-        # - pids-limit=100 (fork-bomb defense)
-        # - read-only root filesystem with ephemeral tmpfs
-        # - isolated port binding on 127.0.0.1 ONLY (not 0.0.0.0)
-        # - no Docker socket or host volumes mounted
-        args = [
-            "docker",
-            "run",
-            "-d",
-            f"--name={container_name}",
-            f"--network={network_name}",
-            "--cap-drop=ALL",
-            "--security-opt=no-new-privileges:true",
-            "--read-only",
-            "--tmpfs=/tmp:rw,noexec,nosuid,size=64m",
-            "--memory=512m",
-            "--cpus=1.0",
-            "--pids-limit=100",
-            f"-p=127.0.0.1:{host_port}:{app_port}",
-            image_tag,
-        ]
-
-        res = run_command(args, timeout_seconds=20, tool_name="docker-run")
-        safe_output = redact(res.stdout + "\n" + res.stderr)
-
-        if not res.succeeded:
-            return False, None, safe_output
-
-        return True, host_port, safe_output
 
     def _generate_dockerfile(self, profile: ProjectProfile) -> str:
         """Create a standard, secure Dockerfile with non-root user for supported frameworks."""
@@ -367,6 +298,59 @@ class RuntimeOrchestrator:
         else:
             return "FROM alpine:3.19\nCMD [\"echo\", \"unsupported\"]\n"
 
+    def _build_image(
+        self,
+        workspace_path: str,
+        profile: ProjectProfile,
+        image_tag: str,
+    ) -> Tuple[bool, str]:
+        """
+        Build an image via the broker.
+
+        If the workspace has no Dockerfile, generate a secure one, build, then
+        remove the generated file so the workspace is not polluted.
+        """
+        dockerfile_path = Path(workspace_path) / "Dockerfile"
+        generated_dockerfile = False
+
+        if not dockerfile_path.exists():
+            generated_content = self._generate_dockerfile(profile)
+            with open(dockerfile_path, "w", encoding="utf-8") as f:
+                f.write(generated_content)
+            generated_dockerfile = True
+
+        try:
+            build_ok, build_log = self.broker.build_image(
+                workspace_path=workspace_path,
+                image_tag=image_tag,
+                network_mode=settings.BUILD_NETWORK_MODE,
+            )
+        finally:
+            if generated_dockerfile and dockerfile_path.exists():
+                try:
+                    dockerfile_path.unlink()
+                except Exception:
+                    pass
+
+        return build_ok, build_log
+
+    def _start_container(
+        self,
+        container_name: str,
+        network_name: str,
+        image_tag: str,
+        app_port: int,
+        host_port: int,
+    ) -> Tuple[bool, Optional[int], str]:
+        """Start a hardened container via the broker (all security params enforced there)."""
+        return self.broker.run_container(
+            container_name=container_name,
+            image_tag=image_tag,
+            network_name=network_name,
+            app_port=app_port,
+            host_port=host_port,
+        )
+
     def _health_check(self, target_url: str, timeout_seconds: int = 30) -> bool:
         """Poll the target application until it responds or timeout expires."""
         deadline = time.monotonic() + timeout_seconds
@@ -382,19 +366,17 @@ class RuntimeOrchestrator:
         return False
 
     def _get_container_logs(self, container_name: str) -> str:
-        """Retrieve stdout/stderr logs from the container with secret redaction."""
-        res = run_command(["docker", "logs", "--tail=100", container_name], timeout_seconds=10, tool_name="docker-logs")
-        return redact(res.stdout + "\n" + res.stderr)
+        """Retrieve redacted container logs from the broker."""
+        return self.broker.get_logs(container_name)
 
     def _cleanup_resources(self, container_name: str, network_name: str, image_tag: str) -> None:
-        """Remove container, network, and intermediate build image."""
-        run_command(["docker", "rm", "-f", container_name], timeout_seconds=15, tool_name="docker-rm")
-        run_command(["docker", "network", "rm", network_name], timeout_seconds=10, tool_name="docker-net-rm")
-        run_command(["docker", "rmi", image_tag], timeout_seconds=15, tool_name="docker-rmi")
+        """Remove container, network, and intermediate build image via the broker."""
+        self.broker.cleanup(container_name, network_name, image_tag)
 
     def _find_available_port(self) -> int:
-        """Find an available local TCP port."""
+        """Find an available local TCP port (used as a hint; broker may rebind)."""
         import socket
+
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.bind(("127.0.0.1", 0))
             return s.getsockname()[1]

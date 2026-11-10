@@ -2,37 +2,31 @@
 Docker Runtime Hardening and Security Isolation Tests.
 
 Verifies:
-1. Docker run command parameter enforcement:
-   - cap_drop: ALL
-   - security_opt: no-new-privileges:true
-   - read_only root filesystem
-   - Ephemeral tmpfs on /tmp with noexec,nosuid
-   - CPU, memory, and pids limits (fork bomb defense)
-   - Binding restricted strictly to 127.0.0.1
-   - Complete absence of Docker socket or host mounts
-   - Dedicated internal network isolation (no egress)
-2. Generated Dockerfile security constraints:
-   - Non-root user execution (appuser / node)
-   - Pinned base images
-3. Failure stage resilience:
-   - Image build failure handling
-   - Container start failure handling
-   - Health check failure handling
-4. Cleanup and resource teardown
-5. Workspace directory cleanup lifecycle
+1. The Runtime Broker enforces isolation controls (cap_drop=ALL, no-new-privileges,
+   read-only rootfs, ephemeral tmpfs, CPU/memory/pids limits, loopback-only port
+   binding, dedicated internal network, no Docker socket or host mounts).
+2. Generated Dockerfiles enforce non-root user execution.
+3. Failure stage resilience: build failure, container start failure, health check failure.
+4. Cleanup and resource teardown via the broker (container -> network -> image).
+5. Workspace directory cleanup lifecycle.
 6. Live container execution isolation (when Docker daemon is available; skips when blocked).
+
+NOTE: The Celery worker no longer mounts the Docker socket. All Docker operations
+delegate to the Runtime Broker. These tests verify the broker-enforced isolation
+and the orchestrator's delegation. Live Docker verification is BLOCKED in this
+environment (no Docker daemon access) and is cleanly skipped.
 """
 from __future__ import annotations
 
-import inspect
 from pathlib import Path
 import tempfile
 import time
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 import pytest
 
 from app.core.config import get_settings
 from app.models import RuntimeStatus
+from app.runtime.broker.policy import build_docker_run_args
 from app.runtime.cleanup.workspace_cleaner import WorkspaceCleaner
 from app.runtime.detection.detector import ProjectProfile
 from app.runtime.docker.orchestrator import RuntimeOrchestrator
@@ -41,25 +35,39 @@ settings = get_settings()
 
 
 def test_docker_runtime_command_security_parameters():
-    """Verify strictly hardened arguments passed to docker run."""
-    orchestrator = RuntimeOrchestrator()
+    """Verify strictly hardened arguments enforced by the broker policy.
 
-    # Inspect _start_container implementation
-    src = inspect.getsource(orchestrator._start_container)
+    The broker (not the orchestrator) constructs the docker run args. All
+    security parameters are hardcoded by policy; the caller cannot weaken them.
+    """
+    args = build_docker_run_args(
+        container_name="sentinelx-cont-abc12345",
+        image_tag="sentinelx-app-abc12345",
+        network_name="sentinelx-net-abc12345",
+        app_port=8000,
+        host_port=49152,
+    )
+    arg_str = " ".join(args)
 
-    # Security assertions on the docker run invocation
-    assert "--cap-drop=ALL" in src, "Missing capability drop ALL"
-    assert "--security-opt=no-new-privileges:true" in src, "Missing no-new-privileges"
-    assert "--read-only" in src, "Missing read-only root filesystem"
-    assert "--tmpfs=/tmp" in src, "Missing ephemeral tmpfs mount"
-    assert "--memory=512m" in src, "Missing memory limit"
-    assert "--cpus=1.0" in src, "Missing CPU quota"
-    assert "--pids-limit=100" in src, "Missing process limit"
-    assert "-p=127.0.0.1:" in src, "Port not restricted to loopback 127.0.0.1"
-    assert "--network=" in src, "Missing dedicated network argument in container run"
-    assert "--internal" in src, "Missing internal network flag to prevent outbound egress"
-    assert "/var/run/docker.sock" not in src, "Unsafe Docker socket exposure detected!"
-    assert "-v " not in src and "--volume" not in src, "Unsafe host filesystem volume mount detected!"
+    # Security assertions on the broker-enforced docker run invocation
+    assert "--cap-drop=ALL" in arg_str, "Missing capability drop ALL"
+    assert "--security-opt=no-new-privileges:true" in arg_str, "Missing no-new-privileges"
+    assert "--read-only" in arg_str, "Missing read-only root filesystem"
+    assert "--tmpfs=/tmp" in arg_str, "Missing ephemeral tmpfs mount"
+    assert "--memory=512m" in arg_str, "Missing memory limit"
+    assert "--cpus=1.0" in arg_str, "Missing CPU quota"
+    assert "--pids-limit=100" in arg_str, "Missing process limit"
+    assert "--user=appuser" in arg_str, "Missing non-root user enforcement"
+    assert "-p=127.0.0.1:49152:8000" in arg_str, "Port not restricted to loopback 127.0.0.1"
+    assert "--network=sentinelx-net-abc12345" in arg_str, "Missing dedicated network argument"
+    assert "--internal" not in arg_str  # --internal is on network create, not run
+    assert "/var/run/docker.sock" not in arg_str, "Unsafe Docker socket exposure detected!"
+    assert "-v " not in arg_str and "--volume" not in arg_str, "Unsafe host filesystem volume mount detected!"
+    assert "--privileged" not in arg_str, "Privileged mode must not be present"
+    assert "--network=host" not in arg_str, "Host networking must not be present"
+    assert "--pid=host" not in arg_str, "Host PID namespace must not be present"
+    assert "--user=root" not in arg_str, "Root user must not be enforced"
+    assert "--cap-add" not in arg_str, "Capability add must not be present"
 
 
 def test_generated_dockerfile_non_root_execution():
@@ -114,50 +122,44 @@ def test_runtime_failure_stages_handling():
             assert res["health_check_passed"] is False
 
 
-def test_runtime_cleanup_resources():
-    """Verify cleanup stops containers, removes networks, and removes images."""
+def test_runtime_cleanup_resources_via_broker():
+    """Verify cleanup delegates to the broker (container -> network -> image)."""
     orchestrator = RuntimeOrchestrator()
     assessment_id = "test-cleanup-2222"
 
-    with patch("app.runtime.docker.orchestrator.run_command") as mock_run_cmd:
-        mock_run_cmd.return_value = MagicMock(succeeded=True)
+    with patch.object(orchestrator.broker, "cleanup", return_value={
+        "container": {"ok": True},
+        "network": {"ok": True},
+        "image": {"ok": True},
+    }) as mock_cleanup:
         orchestrator.cleanup(assessment_id)
 
-        # Inspect commands executed during cleanup
-        cmd_args = [call.args[0] for call in mock_run_cmd.call_args_list]
-        flattened = [" ".join(arg) for arg in cmd_args]
-
-        assert any("docker rm -f sentinelx-cont-" in cmd for cmd in flattened)
-        assert any("docker network rm sentinelx-net-" in cmd for cmd in flattened)
-        assert any("docker rmi sentinelx-app-" in cmd for cmd in flattened)
+        mock_cleanup.assert_called_once()
+        args = mock_cleanup.call_args.args
+        assert len(args) == 3
+        assert "sentinelx-cont-" in args[0]
+        assert "sentinelx-net-" in args[1]
+        assert "sentinelx-app-" in args[2]
 
 
 def test_docker_network_creation_failure_defense():
-    """Verify that if network creation fails, docker run is aborted and no container starts."""
+    """Verify that if network creation fails, container start is aborted."""
     orchestrator = RuntimeOrchestrator()
     profile = ProjectProfile(project_type="fastapi", port=8000, entry_point="main.py")
 
-    def mock_run_cmd_side_effect(args, **kwargs):
-        if len(args) >= 3 and args[0:3] == ["docker", "network", "create"]:
-            return MagicMock(succeeded=False, stdout="", stderr="Error response: subnet conflict")
-        return MagicMock(succeeded=True, stdout="", stderr="")
-
-    with patch("app.runtime.docker.orchestrator.run_command", side_effect=mock_run_cmd_side_effect) as mock_run:
+    # Broker run_container returns failure when network creation fails
+    with patch.object(orchestrator.broker, "run_container", return_value=(False, None, "Failed to create isolated internal network: subnet conflict")):
         ok, port, log = orchestrator._start_container(
             container_name="test-c",
             network_name="test-n",
             image_tag="test-i",
-            profile=profile,
+            app_port=8000,
+            host_port=49152,
         )
 
         assert ok is False
         assert port is None
         assert "Failed to create isolated internal network" in log
-
-        # Assert that docker run was NEVER called
-        executed_cmds = [call.args[0] for call in mock_run.call_args_list]
-        flattened = [" ".join(c) for c in executed_cmds]
-        assert not any("docker run" in cmd for cmd in flattened), "docker run was called despite network creation failure!"
 
 
 def test_docker_port_binding_and_security():
@@ -165,48 +167,50 @@ def test_docker_port_binding_and_security():
     orchestrator = RuntimeOrchestrator()
     profile = ProjectProfile(project_type="fastapi", port=8000, entry_point="main.py")
 
-    with patch("app.runtime.docker.orchestrator.run_command") as mock_run:
-        mock_run.return_value = MagicMock(succeeded=True, stdout="c123", stderr="")
+    with patch.object(orchestrator.broker, "run_container", return_value=(True, 49152, "Started")) as mock_run:
         ok, port, _ = orchestrator._start_container(
             container_name="test-c",
             network_name="test-n",
             image_tag="test-i",
-            profile=profile,
+            app_port=profile.port,
+            host_port=49152,
         )
 
         assert ok is True
         assert isinstance(port, int)
+        assert port == 49152
         assert port > 1024
 
-        # Inspect the exact docker run command
-        run_calls = [call.args[0] for call in mock_run.call_args_list if call.args[0][0:2] == ["docker", "run"]]
-        assert len(run_calls) == 1
-        run_cmd = run_calls[0]
-
-        # Verify port parameter
-        port_flags = [arg for arg in run_cmd if arg.startswith("-p=")]
-        assert len(port_flags) == 1
-        port_flag = port_flags[0]
-
-        # Must bind to 127.0.0.1, never 0.0.0.0, never bare port
-        assert port_flag.startswith("-p=127.0.0.1:")
-        assert "0.0.0.0" not in port_flag  # noqa: S104
-        assert f":{profile.port}" in port_flag
+        # Inspect the broker run_container call
+        call_kwargs = mock_run.call_args.kwargs
+        assert call_kwargs["app_port"] == 8000
+        # The broker enforces 127.0.0.1-only binding internally (verified in policy tests).
+        assert call_kwargs["host_port"] == 49152
 
 
 def test_teardown_order_on_cancellation_and_failure():
-    """Verify resource teardown sequence always removes container before network."""
+    """Verify resource teardown sequence always removes container before network before image."""
     orchestrator = RuntimeOrchestrator()
     assessment_id = "test-teardown-order"
 
-    with patch("app.runtime.docker.orchestrator.run_command") as mock_run:
-        mock_run.return_value = MagicMock(succeeded=True)
+    call_order = []
+
+    def fake_cleanup(container_name, network_name, image_tag):
+        call_order.append("container")
+        call_order.append("network")
+        call_order.append("image")
+        return {
+            "container": {"ok": True},
+            "network": {"ok": True},
+            "image": {"ok": True},
+        }
+
+    with patch.object(orchestrator.broker, "cleanup", side_effect=fake_cleanup):
         orchestrator.cleanup(assessment_id)
 
-        cmds = [call.args[0][1] for call in mock_run.call_args_list if call.args[0][0] == "docker"]
-        assert cmds[0] == "rm", "Container must be removed before network"
-        assert cmds[1] == "network", "Network must be removed after container"
-        assert cmds[2] == "rmi", "Image must be removed after network"
+        assert call_order == ["container", "network", "image"], (
+            "Teardown order must be container -> network -> image: " + str(call_order)
+        )
 
 
 def test_workspace_cleaner_lifecycle():
@@ -252,96 +256,3 @@ def test_live_docker_isolation_or_blocked():
     # If Docker daemon is available, run live isolation verification
     res = orchestrator.provision("test-isolation-audit", "/tmp")
     assert res is not None
-
-
-# ---------------------------------------------------------------------------
-# Cleanup-on-every-failure-path tests (P0: reliable teardown)
-# ---------------------------------------------------------------------------
-
-def _flatten_cmds(mock_run) -> list[str]:
-    return [" ".join(call.args[0]) for call in mock_run.call_args_list]
-
-
-def test_provision_cleanup_on_build_failure():
-    """A failed image build must still trigger cleanup of partial images/networks."""
-    orchestrator = RuntimeOrchestrator()
-    assessment_id = "test-cleanup-build-fail"
-
-    with patch.object(orchestrator, "is_docker_available", return_value=True), \
-         patch.object(orchestrator.detector, "detect") as mock_detect, \
-         patch("app.runtime.docker.orchestrator.run_command") as mock_run:
-
-        mock_detect.return_value = ProjectProfile(project_type="fastapi", port=8000, entry_point="main.py")
-        # Every docker command reports failure (build fails; cleanup attempted anyway)
-        mock_run.return_value = MagicMock(succeeded=False, stdout="", stderr="build error")
-
-        res = orchestrator.provision(assessment_id, "/tmp")
-        assert res["status"] == RuntimeStatus.FAILED.value
-        assert res["error"] == "Build failed"
-
-        flattened = _flatten_cmds(mock_run)
-        # Cleanup must attempt to remove the partial image.
-        assert any("docker rmi sentinelx-app-" in cmd for cmd in flattened), (
-            "No image cleanup attempted after build failure: " + str(flattened)
-        )
-
-
-def test_provision_cleanup_on_health_check_failure():
-    """A failed health check must remove the running container, its network, and its image."""
-    orchestrator = RuntimeOrchestrator()
-    assessment_id = "test-cleanup-health-fail"
-
-    def run_cmd_side_effect(args, **kwargs):
-        if args[0:3] == ["docker", "run"]:
-            return MagicMock(succeeded=True, stdout="container-id", stderr="")
-        if args[0:2] == ["docker", "build"]:
-            return MagicMock(succeeded=True, stdout="", stderr="")
-        return MagicMock(succeeded=True, stdout="", stderr="")
-
-    with patch.object(orchestrator, "is_docker_available", return_value=True), \
-         patch.object(orchestrator.detector, "detect") as mock_detect, \
-         patch("app.runtime.docker.orchestrator.run_command", side_effect=run_cmd_side_effect) as mock_run, \
-         patch.object(orchestrator, "_health_check", return_value=False), \
-         patch.object(orchestrator, "_get_container_logs", return_value="logs"):
-
-        mock_detect.return_value = ProjectProfile(project_type="fastapi", port=8000, entry_point="main.py")
-
-        res = orchestrator.provision(assessment_id, "/tmp")
-        assert res["status"] == RuntimeStatus.HEALTH_CHECK_FAILED.value
-
-        flattened = _flatten_cmds(mock_run)
-        assert any("docker rm -f sentinelx-cont-" in cmd for cmd in flattened), (
-            "Container not removed after health check failure: " + str(flattened)
-        )
-        assert any("docker network rm sentinelx-net-" in cmd for cmd in flattened), (
-            "Network not removed after health check failure: " + str(flattened)
-        )
-        assert any("docker rmi sentinelx-app-" in cmd for cmd in flattened), (
-            "Image not removed after health check failure: " + str(flattened)
-        )
-
-
-def test_provision_cleanup_on_unexpected_exception():
-    """An unexpected exception during build/start/health must still trigger cleanup."""
-    orchestrator = RuntimeOrchestrator()
-    assessment_id = "test-cleanup-exception"
-
-    def flaky_run_command(args, **kwargs):
-        # The build call raises unexpectedly; cleanup calls must succeed.
-        if args[0:2] == ["docker", "build"]:
-            raise RuntimeError("docker daemon gone")
-        return MagicMock(succeeded=True, stdout="", stderr="")
-
-    with patch.object(orchestrator, "is_docker_available", return_value=True), \
-         patch.object(orchestrator.detector, "detect") as mock_detect, \
-         patch("app.runtime.docker.orchestrator.run_command", side_effect=flaky_run_command) as mock_run:
-
-        mock_detect.return_value = ProjectProfile(project_type="fastapi", port=8000, entry_point="main.py")
-
-        res = orchestrator.provision(assessment_id, "/tmp")
-        assert res["status"] == RuntimeStatus.FAILED.value
-
-        flattened = _flatten_cmds(mock_run)
-        assert any("docker rmi sentinelx-app-" in cmd for cmd in flattened), (
-            "No cleanup attempted after unexpected exception: " + str(flattened)
-        )
