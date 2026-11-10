@@ -8,6 +8,9 @@ directly.
 Implementations:
 - RuntimeBrokerClient (app.runtime.broker.client.BrokerClient): talks to the
   existing policy-enforcing Runtime Broker over authenticated HTTP.
+- RemoteRuntimeClient (app.runtime.runtime_host_client.RemoteRuntimeClient):
+  talks to a separate Runtime Execution Plane over mTLS + asymmetric job
+  capability tokens.
 - MockRuntimeClient (app.runtime.mock_client.MockRuntimeClient): simulated
   responses for local development / testing ONLY. Never represents real
   Docker execution.
@@ -17,6 +20,8 @@ Design constraints:
 - All implementations fail closed when the backend is unavailable.
 - Simulated implementations must be clearly distinguishable from live Docker
   execution (every response carries ``simulated=True``).
+- Job-oriented interface: submit_job, get_job_status, get_job_logs, cancel_job.
+  No per-Docker-operation endpoints.
 """
 
 from __future__ import annotations
@@ -82,6 +87,10 @@ class RuntimeClient(abc.ABC):
         Returns (ok, message).
         """
 
+    # ------------------------------------------------------------------
+    # Job-oriented interface (Phase 2)
+    # ------------------------------------------------------------------
+
     @abc.abstractmethod
     def cleanup(
         self,
@@ -93,3 +102,53 @@ class RuntimeClient(abc.ABC):
 
         Returns a dict summarizing results per step.
         """
+
+    # ------------------------------------------------------------------
+    # Job-oriented interface (Phase 2)
+    # ------------------------------------------------------------------
+
+    def submit_job(
+        self,
+        assessment_id: str,
+        operation: str,
+        artifact_url: Optional[str] = None,
+        artifact_sha256: Optional[str] = None,
+    ) -> Tuple[bool, str, Optional[str]]:
+        """Submit a job to the runtime execution plane.
+
+        Subclasses that do not support job-oriented execution should
+        raise NotImplementedError.
+        """
+        raise NotImplementedError(
+            f"{self.__class__.__name__} does not support submit_job"
+        )
+
+    def get_job_status(self, job_id: str) -> Tuple[bool, str, Optional[str]]:
+        """Get the status of a submitted job.
+
+        Subclasses that do not support job-oriented execution should
+        raise NotImplementedError.
+        """
+        raise NotImplementedError(
+            f"{self.__class__.__name__} does not support get_job_status"
+        )
+
+    def get_job_logs(self, job_id: str) -> Tuple[bool, str]:
+        """Get redacted container logs for a job.
+
+        Subclasses that do not support job-oriented execution should
+        raise NotImplementedError.
+        """
+        raise NotImplementedError(
+            f"{self.__class__.__name__} does not support get_job_logs"
+        )
+
+    def cancel_job(self, job_id: str) -> Tuple[bool, str]:
+        """Cancel/cleanup a job.
+
+        Subclasses that do not support job-oriented execution should
+        raise NotImplementedError.
+        """
+        raise NotImplementedError(
+            f"{self.__class__.__name__} does not support cancel_job"
+        )

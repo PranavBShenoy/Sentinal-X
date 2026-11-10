@@ -157,3 +157,72 @@ class MockRuntimeClient(RuntimeClient):
             "network": {"ok": step_ok, "log": "[simulated] network removed"},
             "image": {"ok": step_ok, "log": "[simulated] image removed"},
         }
+
+    # ------------------------------------------------------------------
+    # Job-oriented interface (Phase 2)
+    # ------------------------------------------------------------------
+
+    def submit_job(
+        self,
+        assessment_id: str,
+        operation: str,
+        artifact_url: Optional[str] = None,
+        artifact_sha256: Optional[str] = None,
+    ) -> Tuple[bool, str, Optional[str]]:
+        """Simulate submitting a job to the runtime execution plane.
+
+        Never contacts a Docker daemon. Returns success unless
+        ``fail_build`` is set (for build operations) or ``fail_start`` is set
+        (for run operations).
+        """
+        self.calls.append(
+            {
+                "client_method": "submit_job",
+                "assessment_id": assessment_id,
+                "operation": operation,
+                "artifact_url": artifact_url,
+                "artifact_sha256": artifact_sha256,
+            }
+        )
+        if operation == "build" and self.fail_build:
+            return False, "[simulated] build failed: cannot connect to Docker daemon", None
+        if operation == "run" and self.fail_start:
+            return False, "[simulated] container start failed: runtime unavailable", None
+        job_id = f"j-{assessment_id[:8]}-{operation}"
+        simulated_port = 19000
+        target_url = f"http://127.0.0.1:{simulated_port}" if operation == "run" else None
+        return True, job_id, target_url
+
+    def get_job_status(self, job_id: str) -> Tuple[bool, str, Optional[str]]:
+        """Simulate getting job status.
+
+        Returns ("completed", "completed", target_url) for success.
+        """
+        self.calls.append(
+            {
+                "operation": "get_job_status",
+                "job_id": job_id,
+            }
+        )
+        # Simulate that all jobs eventually complete successfully
+        return True, "completed", "http://127.0.0.1:19000"
+
+    def get_job_logs(self, job_id: str) -> Tuple[bool, str]:
+        """Simulate getting job logs."""
+        self.calls.append(
+            {
+                "operation": "get_job_logs",
+                "job_id": job_id,
+            }
+        )
+        return True, f"[simulated] logs for job {job_id} (simulated execution, no Docker used)"
+
+    def cancel_job(self, job_id: str) -> Tuple[bool, str]:
+        """Simulate canceling a job."""
+        self.calls.append(
+            {
+                "operation": "cancel_job",
+                "job_id": job_id,
+            }
+        )
+        return True, f"[simulated] job {job_id} cancelled"

@@ -159,7 +159,18 @@ class Settings(BaseSettings):
     #   Broker over authenticated HTTP. Requires BROKER_API_KEY.
     # - "simulated": development/test-only canned responses. NEVER performs
     #   real Docker execution. Rejected in production.
+    # - "remote": talk to a separate Runtime Execution Plane over mTLS +
+    #   asymmetric job capability tokens. Requires RUNTIME_URL,
+    #   RUNTIME_CLIENT_CERT, RUNTIME_CLIENT_KEY, RUNTIME_CA_CERT.
     RUNTIME_MODE: str = "broker"
+    # Runtime Execution Plane URL (used when RUNTIME_MODE=remote).
+    RUNTIME_URL: str = "http://localhost:8001"
+    # mTLS client certificate for authenticating to the Runtime Host.
+    RUNTIME_CLIENT_CERT: Optional[str] = None
+    # mTLS client private key for authenticating to the Runtime Host.
+    RUNTIME_CLIENT_KEY: Optional[str] = None
+    # CA certificate for verifying the Runtime Host's server certificate.
+    RUNTIME_CA_CERT: Optional[str] = None
 
     # ------------------------------------------------------------------ #
     # Rate limiting

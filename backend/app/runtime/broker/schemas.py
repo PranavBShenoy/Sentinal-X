@@ -9,7 +9,7 @@ NOT accepted from the caller. Unknown fields are rejected.
 from __future__ import annotations
 
 import re
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -188,3 +188,85 @@ class HealthResponse(BaseModel):
     status: str
     service: str = "sentinelx-runtime-broker"
     docker_available: bool = False
+
+
+# ---------------------------------------------------------------------------
+# Job-oriented request/response schemas (Phase 2)
+# ---------------------------------------------------------------------------
+
+class JobSubmitRequest(BaseModel):
+    """Request to submit a job to the Runtime Execution Plane.
+
+    All fields are validated server-side by the Runtime Host. The control
+    plane never supplies arbitrary Docker API parameters.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    job_id: str = Field(..., description="Unique job identifier")
+    tenant_id: str = Field(..., description="Owning tenant ID")
+    assessment_id: str = Field(..., description="Owning assessment ID")
+    operation: str = Field(
+        ...,
+        description="One of: build, run, cleanup, cancel, status, logs",
+    )
+    resources: list[str] = Field(
+        ...,
+        description="Exact resource names this job may touch",
+    )
+    resource_limits: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Resource limits (memory, CPUs, PIDs, disk, time)",
+    )
+    artifact_url: Optional[str] = Field(
+        None,
+        description="Pre-signed URL to workspace tarball (build only)",
+    )
+    artifact_sha256: Optional[str] = Field(
+        None,
+        description="SHA-256 of workspace tarball (build only)",
+    )
+
+
+class JobSubmitResponse(BaseModel):
+    """Response from job submission."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    job_id: str
+    status: str
+    message: str
+    target_url: Optional[str] = None
+    expires_at: Optional[str] = None
+
+
+class JobStatusResponse(BaseModel):
+    """Response from job status query."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    job_id: str
+    status: str
+    target_url: Optional[str] = None
+    error: Optional[str] = None
+    created_at: Optional[str] = None
+    completed_at: Optional[str] = None
+
+
+class JobLogsResponse(BaseModel):
+    """Response from job logs query."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    job_id: str
+    logs: str
+
+
+class JobCancelResponse(BaseModel):
+    """Response from job cancellation."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    job_id: str
+    status: str
+    message: str
