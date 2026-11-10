@@ -23,6 +23,7 @@ Policy rules:
 
 from __future__ import annotations
 
+from pathlib import Path
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -65,15 +66,28 @@ def validate_image_tag(image_tag: str) -> str:
 
 
 def validate_workspace_path(workspace_path: str) -> str:
-    """Ensure the build context is under the allowed assessment workspace base."""
-    base = settings.ASSESSMENT_WORKSPACE_BASE.rstrip("/")
-    path = workspace_path.rstrip("/")
-    if path != base and not path.startswith(base + "/"):
+    """Ensure the build context is under the allowed assessment workspace base.
+
+    The path is resolved (symlinks and ``..`` components normalised) before the
+    prefix check, so an attacker cannot escape the workspace base via
+    ``../`` traversal or a symlink pointing outside the base.
+    """
+    base = Path(settings.ASSESSMENT_WORKSPACE_BASE).resolve()
+    try:
+        path = Path(workspace_path).resolve()
+    except (OSError, ValueError):
+        raise BrokerError(
+            f"Build context '{workspace_path}' cannot be resolved.",
+            status_code=400,
+        )
+    try:
+        path.relative_to(base)
+    except ValueError:
         raise BrokerError(
             f"Build context '{workspace_path}' is outside {settings.ASSESSMENT_WORKSPACE_BASE}.",
             status_code=400,
         )
-    return path
+    return str(path)
 
 
 def validate_build_network_mode(network_mode: str) -> str:

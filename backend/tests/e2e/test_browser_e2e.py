@@ -69,6 +69,34 @@ def is_port_in_use(port: int) -> bool:
         return s.connect_ex(("127.0.0.1", port)) == 0
 
 
+def _free_port(port: int) -> None:
+    """Kill any process already listening on *port* so the E2E servers can bind cleanly.
+
+    Uses ``fuser -k`` (SIGKILL) as the primary mechanism and falls back to
+    ``lsof`` + ``kill``. This is a test-only helper used to clear leftover
+    processes from previous runs; it never touches production services.
+    """
+    try:
+        subprocess.run(
+            ["fuser", "-k", f"{port}/tcp"],
+            capture_output=True,
+            timeout=5,
+        )
+    except Exception:
+        try:
+            result = subprocess.run(
+                ["lsof", "-ti", f":{port}"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            pids = [p for p in result.stdout.split() if p.strip()]
+            for pid in pids:
+                subprocess.run(["kill", "-9", pid], capture_output=True, timeout=5)
+        except Exception:
+            pass
+
+
 @pytest.fixture(scope="module")
 def e2e_environment() -> Generator[dict, None, None]:
     """Sets up FastAPI backend on port 8000 and Vite preview frontend on port 3000."""
@@ -86,6 +114,10 @@ def e2e_environment() -> Generator[dict, None, None]:
             f.unlink()
         except OSError:
             pass
+
+    # Free ports from any previous run so the E2E servers can bind cleanly.
+    _free_port(8000)
+    _free_port(3000)
 
     # Run database migration
     env = dict(os.environ)
@@ -114,9 +146,11 @@ def e2e_environment() -> Generator[dict, None, None]:
         stderr=api_log,
     )
 
-    # Start Vite preview on 3000
+    # Start Vite preview on 3000 (use local binary; npx may resolve to a
+    # different binary that fails to serve the built dist/ directory).
+    vite_bin = frontend_dir / "node_modules" / ".bin" / "vite"
     vite_proc = subprocess.Popen(
-        ["npx", "vite", "preview", "--port", "3000", "--host", "127.0.0.1"],
+        [str(vite_bin), "preview", "--port", "3000", "--host", "127.0.0.1"],
         cwd=str(frontend_dir),
         stdout=vite_log,
         stderr=vite_log,
