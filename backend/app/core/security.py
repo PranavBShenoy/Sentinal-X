@@ -107,23 +107,43 @@ def hash_refresh_token(plain: str) -> str:
 # ---------------------------------------------------------------------------
 
 def get_fernet():
-    """Return a Fernet instance for field encryption."""
-    from cryptography.fernet import Fernet, InvalidToken  # noqa: F401
-    key = settings.ENCRYPTION_KEY
-    if not key:
+    """
+    Return a Fernet or MultiFernet instance for field encryption.
+    Supports comma-separated keys in ENCRYPTION_KEY to enable seamless key rotation:
+    - Primary key (first in list) is used for all new encryptions.
+    - Fallback keys are used to decrypt existing tokens without downtime or data loss.
+    """
+    from cryptography.fernet import Fernet, MultiFernet
+    raw_key = settings.ENCRYPTION_KEY
+    if not raw_key:
         raise RuntimeError(
             "ENCRYPTION_KEY is not set. Cannot encrypt sensitive configuration."
         )
-    return Fernet(key.encode() if isinstance(key, str) else key)
+    if isinstance(raw_key, str):
+        keys = [k.strip() for k in raw_key.split(",") if k.strip()]
+    else:
+        keys = [raw_key]
+
+    fernets = [Fernet(k.encode("utf-8") if isinstance(k, str) else k) for k in keys]
+    return MultiFernet(fernets) if len(fernets) > 1 else fernets[0]
 
 
 def encrypt_value(plain: str) -> str:
-    """Encrypt a string value for secure DB storage."""
+    """Encrypt a string value for secure DB storage using the primary encryption key."""
     f = get_fernet()
     return f.encrypt(plain.encode("utf-8")).decode("utf-8")
 
 
 def decrypt_value(ciphertext: str) -> str:
-    """Decrypt a stored ciphertext value."""
+    """Decrypt a stored ciphertext value, supporting both primary and rotated fallback keys."""
     f = get_fernet()
     return f.decrypt(ciphertext.encode("utf-8")).decode("utf-8")
+
+
+def rotate_encrypted_value(ciphertext: str) -> str:
+    """Re-encrypt a ciphertext under the primary key if MultiFernet key rotation is configured."""
+    from cryptography.fernet import MultiFernet
+    f = get_fernet()
+    if isinstance(f, MultiFernet):
+        return f.rotate(ciphertext.encode("utf-8")).decode("utf-8")
+    return ciphertext

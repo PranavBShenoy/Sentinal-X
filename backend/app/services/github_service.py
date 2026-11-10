@@ -10,6 +10,7 @@ import hashlib
 import hmac
 import logging
 import secrets
+import threading
 import time
 from typing import Any, Dict, List, Optional
 
@@ -81,6 +82,49 @@ class GitHubService:
         ).hexdigest()
 
         return hmac.compare_digest(received_sig, expected_sig)
+
+    # In-memory thread-safe state consumption tracker for replay prevention
+    _consumed_states: dict[str, float] = {}
+    _consumed_lock = threading.Lock()
+
+    def consume_oauth_state(self, state: str) -> bool:
+        """
+        Mark an OAuth state as consumed to prevent replay attacks (one-time consumption).
+        Returns True if state was successfully consumed (first time).
+        Returns False if state was already consumed (replay attack detected).
+        """
+        if not state or ":" not in state:
+            return False
+        parts = state.split(":")
+        if len(parts) != 3:
+            return False
+        nonce = parts[1]
+
+        # 1. Distributed replay prevention via Redis if available
+        try:
+            import redis
+            r = redis.from_url(settings.REDIS_URL, decode_responses=True)
+            # Set key with NX (only if Not eXists) and 600s TTL
+            res = r.set(f"sentinelx:oauth_consumed:{nonce}", "1", ex=600, nx=True)
+            if not res:
+                return False  # Already consumed in Redis!
+            return True
+        except Exception:
+            # 2. Resilient fallback to thread-safe in-memory cache
+            return self._consume_local_nonce(nonce)
+
+    def _consume_local_nonce(self, nonce: str) -> bool:
+        now = time.time()
+        with self._consumed_lock:
+            # Prune expired nonces (>600 seconds)
+            expired = [k for k, exp in self._consumed_states.items() if exp < now]
+            for k in expired:
+                del self._consumed_states[k]
+
+            if nonce in self._consumed_states:
+                return False  # Replay detected!
+            self._consumed_states[nonce] = now + 600
+            return True
 
     def verify_webhook_signature(
         self,
@@ -210,10 +254,18 @@ class GitHubService:
         access_token: str,
     ) -> str:
         """Create a pull request and return its URL."""
-        url = f"{GITHUB_API_BASE}/repos/{full_name}/pulls"
-        # Determine default branch to target
+        # 1. Fetch repo metadata and verify default branch
         repo_data = await self.get_repo(full_name, access_token)
+
+        # 2. Server-side permission check: Verify write / push permission before attempting PR
+        permissions = repo_data.get("permissions", {})
+        if permissions and not (permissions.get("push") or permissions.get("admin")):
+            raise PermissionError(
+                f"Unauthorized: GitHub account lacks write/push permissions on repository '{full_name}'."
+            )
+
         base_branch = repo_data.get("default_branch", "main")
+        url = f"{GITHUB_API_BASE}/repos/{full_name}/pulls"
 
         async with httpx.AsyncClient(timeout=15) as client:
             resp = await client.post(

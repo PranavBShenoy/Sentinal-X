@@ -20,9 +20,8 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import get_current_user, rate_limit
@@ -288,8 +287,19 @@ def me(current_user: User = Depends(get_current_user)) -> UserResponse:
 # --------------------------------------------------------------------------- #
 
 @router.get("/github/authorize", summary="Get GitHub OAuth authorization URL")
-def github_authorize() -> dict:
+def github_authorize(response: Response) -> dict:
     state = github_service.generate_oauth_state()
+    # Extract nonce from state format {timestamp}:{nonce}:{signature}
+    parts = state.split(":")
+    nonce = parts[1] if len(parts) >= 2 else state
+    # Bind state to initiating browser session via secure cookie
+    response.set_cookie(
+        key="sentinelx_oauth_nonce",
+        value=nonce,
+        max_age=600,
+        httponly=True,
+        samesite="lax",
+    )
     url = github_service.get_oauth_url(state=state)
     return {"authorization_url": url, "state": state}
 
@@ -297,18 +307,42 @@ def github_authorize() -> dict:
 @router.get("/github/callback", response_model=TokenResponse, summary="GitHub OAuth callback")
 async def github_callback(
     code: str,
-    state: Optional[str] = None,
+    state: str,
     request: Request = None,
+    response: Response = None,
     db: Session = Depends(get_db),
 ) -> TokenResponse:
     if not code:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing OAuth code.")
+    if not state:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing OAuth state parameter.")
 
-    if state and not github_service.verify_oauth_state(state):
+    # 1. Verify browser session binding if initiated via browser session cookie
+    if request and "sentinelx_oauth_nonce" in request.cookies:
+        cookie_nonce = request.cookies.get("sentinelx_oauth_nonce")
+        parts = state.split(":")
+        if len(parts) != 3 or parts[1] != cookie_nonce:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="OAuth state does not match the initiating browser session.",
+            )
+
+    # 2. Cryptographic signature and expiration verification
+    if not github_service.verify_oauth_state(state):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid or expired OAuth state parameter.",
         )
+
+    # 3. One-time state consumption (Replay Prevention)
+    if not github_service.consume_oauth_state(state):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="OAuth state has already been consumed (replay attack detected).",
+        )
+
+    if response:
+        response.delete_cookie("sentinelx_oauth_nonce")
 
     try:
         result = await github_service.exchange_code(code)

@@ -65,3 +65,55 @@ def test_secret_redactor():
     cleaned = redact(text)
     assert "SuperSecretDBPassword123" not in cleaned
     assert "[REDACTED" in cleaned
+
+
+def test_fernet_encryption_and_decryption():
+    from app.core.security import decrypt_value, encrypt_value
+
+    secret_val = "gho_super_secret_github_oauth_access_token_999"
+    encrypted = encrypt_value(secret_val)
+
+    assert encrypted != secret_val
+    assert isinstance(encrypted, str)
+    decrypted = decrypt_value(encrypted)
+    assert decrypted == secret_val
+
+
+def test_fernet_key_rotation_and_backward_compatibility():
+    """Verify that older tokens remain readable when ENCRYPTION_KEY is rotated with fallback keys."""
+    from unittest.mock import patch
+    from cryptography.fernet import Fernet
+    from app.core.security import decrypt_value, encrypt_value, rotate_encrypted_value
+
+    old_key = Fernet.generate_key().decode()
+    new_key = Fernet.generate_key().decode()
+
+    # 1. Encrypt under old key
+    with patch("app.core.security.settings.ENCRYPTION_KEY", old_key):
+        old_ciphertext = encrypt_value("token-encrypted-with-old-key")
+
+    # 2. Rotate configuration: new_key is primary, old_key is fallback
+    multi_key_config = f"{new_key},{old_key}"
+    with patch("app.core.security.settings.ENCRYPTION_KEY", multi_key_config):
+        # Existing token is still readable seamlessly!
+        assert decrypt_value(old_ciphertext) == "token-encrypted-with-old-key"
+
+        # New encryptions use new_key
+        new_ciphertext = encrypt_value("token-encrypted-with-new-key")
+        assert decrypt_value(new_ciphertext) == "token-encrypted-with-new-key"
+
+        # Rotate old token into new primary key
+        re_encrypted = rotate_encrypted_value(old_ciphertext)
+        assert re_encrypted != old_ciphertext
+
+    # 3. Verify re-encrypted token can now be decrypted with new_key alone
+    with patch("app.core.security.settings.ENCRYPTION_KEY", new_key):
+        assert decrypt_value(re_encrypted) == "token-encrypted-with-old-key"
+
+
+def test_fernet_corrupted_ciphertext_fails():
+    from cryptography.fernet import InvalidToken
+    from app.core.security import decrypt_value
+
+    with pytest.raises(InvalidToken):
+        decrypt_value("gAAAAABl-tampered-corrupted-fernet-token-1234567890==")

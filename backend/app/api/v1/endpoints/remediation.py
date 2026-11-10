@@ -18,9 +18,11 @@ from sqlalchemy.orm import Session
 
 from app.api.dependencies import get_assessment_or_404, get_current_user
 from app.core.database import get_db
+from app.core.logging import get_logger
 from app.integrations.openrouter.client import OpenRouterClient
 from app.models import (
     Assessment,
+    GitHubInstallation,
     Project,
     RemediationProposal,
     RemediationStatus,
@@ -32,6 +34,7 @@ from app.schemas import (
 )
 
 router = APIRouter(tags=["remediation"])
+logger = get_logger(__name__)
 
 
 def get_proposal_or_404(
@@ -152,5 +155,92 @@ def verify_remediation_proposal(
         "Regression tests passed."
     )
     db.flush()
+
+    return RemediationResponse.model_validate(proposal)
+
+
+@router.post(
+    "/remediations/{proposal_id}/create-pr",
+    response_model=RemediationResponse,
+    summary="Create a GitHub Pull Request for an approved remediation proposal",
+)
+async def create_remediation_pr(
+    proposal: RemediationProposal = Depends(get_proposal_or_404),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> RemediationResponse:
+    """
+    Create a GitHub Pull Request for an approved remediation proposal.
+    Enforces server-side authorization:
+    1. Proposal must be in APPROVED or VERIFIED state.
+    2. User must own the project.
+    3. User must have an active GitHub account connection.
+    4. User must have write/push permissions on the target repository.
+    """
+    if proposal.status not in (RemediationStatus.APPROVED, RemediationStatus.VERIFIED):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Remediation proposal must be approved or verified before creating a pull request.",
+        )
+
+    # Find the repository associated with this proposal's assessment
+    assessment = proposal.assessment
+    repo = assessment.repository if assessment else None
+    if not repo:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No repository associated with this assessment.",
+        )
+
+    # Retrieve GitHub installation and decrypt token
+    installation = (
+        db.query(GitHubInstallation)
+        .filter(
+            GitHubInstallation.user_id == current_user.id,
+            GitHubInstallation.revoked_at.is_(None),
+        )
+        .first()
+    )
+    if not installation or not installation.encrypted_access_token:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="GitHub account not connected. Complete GitHub OAuth first.",
+        )
+
+    from app.core.security import decrypt_value
+    try:
+        access_token = decrypt_value(installation.encrypted_access_token)
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Could not decrypt GitHub access token.",
+        )
+
+    # Server-side repository permission check: verify write/push permission
+    from app.services.github_service import github_service
+    has_push = await github_service.check_repo_permission(repo.full_name, access_token, "push")
+    if not has_push:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Forbidden: You do not have write/push permissions on repository '{repo.full_name}'.",
+        )
+
+    # Create pull request via GitHub service
+    try:
+        pr_url = await github_service.create_pr(
+            full_name=repo.full_name,
+            branch=proposal.proposed_branch or f"sentinelx-fix/{str(proposal.id)[:8]}",
+            title=f"Fix: {proposal.finding.title if proposal.finding else 'Security vulnerability'}",
+            body=proposal.summary or "Automated remediation patch proposed by SENTINEL-X.",
+            access_token=access_token,
+        )
+        proposal.pr_url = pr_url
+        proposal.status = RemediationStatus.APPLIED
+        db.flush()
+    except PermissionError as pe:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(pe))
+    except Exception as exc:
+        logger.error("Failed to create GitHub PR: %s", exc)
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Failed to create GitHub pull request.")
 
     return RemediationResponse.model_validate(proposal)

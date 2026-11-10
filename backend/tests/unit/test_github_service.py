@@ -131,7 +131,10 @@ def test_create_pr_success(github_service):
     async def _test():
         repo_resp = MagicMock(spec=httpx.Response)
         repo_resp.status_code = 200
-        repo_resp.json.return_value = {"default_branch": "main"}
+        repo_resp.json.return_value = {
+            "default_branch": "main",
+            "permissions": {"push": True, "admin": True},
+        }
         repo_resp.headers = {"X-RateLimit-Remaining": "4970"}
 
         pr_resp = MagicMock(spec=httpx.Response)
@@ -237,5 +240,69 @@ def test_check_repo_permission(github_service):
 
             can_maintain = await github_service.check_repo_permission("octocat/Hello-World", "token", "maintain")
             assert can_maintain is False
+
+    asyncio.run(_test())
+
+
+def test_oauth_state_one_time_consumption_replay_defense(github_service):
+    """Verify state can only be consumed once, preventing replay attacks."""
+    state = github_service.generate_oauth_state()
+
+    # 1. First consumption succeeds
+    first_res = github_service.consume_oauth_state(state)
+    assert first_res is True
+
+    # 2. Immediate replay attempt fails closed
+    replay_res = github_service.consume_oauth_state(state)
+    assert replay_res is False
+
+    # 3. Invalid format fails closed
+    assert github_service.consume_oauth_state("malformed") is False
+
+
+def test_oauth_concurrent_login_attempts(github_service):
+    """Verify concurrent login attempts generate distinct nonces that do not collide or invalidate each other."""
+    state_a = github_service.generate_oauth_state()
+    state_b = github_service.generate_oauth_state()
+
+    assert state_a != state_b
+
+    # Both states are cryptographically valid
+    assert github_service.verify_oauth_state(state_a) is True
+    assert github_service.verify_oauth_state(state_b) is True
+
+    # Consuming state_a does not affect state_b
+    assert github_service.consume_oauth_state(state_a) is True
+    assert github_service.consume_oauth_state(state_b) is True
+
+    # But neither can be replayed
+    assert github_service.consume_oauth_state(state_a) is False
+    assert github_service.consume_oauth_state(state_b) is False
+
+
+def test_create_pr_unauthorized_permission_rejection(github_service):
+    """Verify create_pr enforces server-side check and rejects users lacking write/push permissions."""
+    async def _test():
+        # Read-only permission metadata from GitHub API
+        read_only_repo_data = {
+            "name": "Hello-World",
+            "default_branch": "main",
+            "permissions": {"admin": False, "push": False, "pull": True},
+        }
+
+        with patch.object(github_service, "get_repo", return_value=read_only_repo_data), \
+             patch("httpx.AsyncClient.post") as mock_post:
+
+            with pytest.raises(PermissionError, match="lacks write/push permissions"):
+                await github_service.create_pr(
+                    full_name="octocat/Hello-World",
+                    branch="fix-branch",
+                    title="Fix vulnerability",
+                    body="Patch",
+                    access_token="read-only-token",
+                )
+
+            # Ensure no HTTP POST was sent to GitHub API pulls endpoint
+            mock_post.assert_not_called()
 
     asyncio.run(_test())
