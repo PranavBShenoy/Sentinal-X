@@ -651,3 +651,20 @@ SENTINEL-X handles this constraint with architectural honesty:
 - **No Deceptive Mocking**: We never claim a mock container ran when it did not.
 - **Graceful Orchestrator Detection**: `RuntimeOrchestrator.is_docker_available()` probes Docker availability. If unavailable, it sets `runtime_status = RuntimeStatus.FAILED` or `BLOCKED` with detailed audit logging while allowing the static analysis and report generation pipelines to complete flawlessly.
 - **Production Reproduction**: Complete reproduction steps for genuine Docker hosts are documented in `docs/operations/DOCKER_AND_RUNTIME.md` and `docker-compose.yml`.
+
+---
+
+### 16.4 Cryptographic OAuth State Protection & Webhook Signature Verification
+
+#### OAuth CSRF Defense
+To prevent login CSRF and authorization code interception attacks, `GitHubService` implements signed OAuth state tokens:
+1. **Timestamped Nonce**: Each state parameter contains `{timestamp}:{nonce}:{signature}`.
+2. **HMAC-SHA256 Signing**: The raw timestamp and nonce are signed using `JWT_SECRET` in constant time.
+3. **Expiration Bound**: States expire after 600 seconds (10 minutes) and reject future-dated timestamps.
+4. **Fail-Closed Validation**: If a state is missing, tampered, expired, or malformed, `verify_oauth_state()` returns `False`, causing the callback endpoint to reject the request with HTTP 400.
+
+#### Webhook Integrity Verification
+`GitHubService.verify_webhook_signature()` verifies the `X-Hub-Signature-256` header:
+1. Parses `sha256=<hex_digest>` from the incoming webhook request.
+2. Computes the HMAC-SHA256 of the raw request payload using `GITHUB_WEBHOOK_SECRET`.
+3. Compares signatures using `hmac.compare_digest()` to eliminate timing attack vectors.
