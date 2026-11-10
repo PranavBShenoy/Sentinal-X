@@ -96,7 +96,7 @@ pip install pytest pytest-cov
 # Run migrations
 alembic upgrade head
 
-# Run complete test suite (110 tests: 109 passed, 1 skipped)
+# Run complete test suite (124 tests: 123 passed, 1 skipped)
 PYTHONPATH=. python -m pytest tests/ -v
 ```
 

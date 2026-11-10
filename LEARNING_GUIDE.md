@@ -656,15 +656,34 @@ SENTINEL-X handles this constraint with architectural honesty:
 
 ### 16.4 Cryptographic OAuth State Protection & Webhook Signature Verification
 
-#### OAuth CSRF Defense
-To prevent login CSRF and authorization code interception attacks, `GitHubService` implements signed OAuth state tokens:
-1. **Timestamped Nonce**: Each state parameter contains `{timestamp}:{nonce}:{signature}`.
+#### OAuth CSRF Defense & Session Binding
+To prevent login CSRF, authorization code interception, and session fixation attacks, `GitHubService` and the auth routes implement a multi-layered defense:
+1. **Timestamped Nonce**: Each state parameter contains `{timestamp}:{nonce}:{signature}` generated with 128-bit cryptographic entropy (`secrets.token_hex(16)`).
 2. **HMAC-SHA256 Signing**: The raw timestamp and nonce are signed using `JWT_SECRET` in constant time.
-3. **Expiration Bound**: States expire after 600 seconds (10 minutes) and reject future-dated timestamps.
-4. **Fail-Closed Validation**: If a state is missing, tampered, expired, or malformed, `verify_oauth_state()` returns `False`, causing the callback endpoint to reject the request with HTTP 400.
+3. **Browser Session Binding**: `GET /api/v1/auth/github/authorize` sets a secure, `HttpOnly`, `SameSite=Lax` cookie (`sentinelx_oauth_nonce`). The callback endpoint verifies that the cookie matches the nonce in the state, binding the flow to the initiating browser.
+4. **Replay Prevention & One-Time Consumption**: `consume_oauth_state()` atomically marks states as consumed via distributed Redis (`SET sentinelx:oauth_consumed:<nonce> 1 EX 600 NX`) with a thread-safe in-memory cache fallback. Immediate replays fail closed with HTTP 400.
+5. **Expiration Bound**: States expire after 600 seconds (10 minutes) and reject future-dated timestamps.
+6. **Concurrent Login Isolation**: Random nonces guarantee distinct concurrent login attempts do not collide or invalidate each other.
 
 #### Webhook Integrity Verification
 `GitHubService.verify_webhook_signature()` verifies the `X-Hub-Signature-256` header:
 1. Parses `sha256=<hex_digest>` from the incoming webhook request.
 2. Computes the HMAC-SHA256 of the raw request payload using `GITHUB_WEBHOOK_SECRET`.
 3. Compares signatures using `hmac.compare_digest()` to eliminate timing attack vectors.
+
+---
+
+### 16.5 MultiFernet Field Encryption & Zero-Downtime Key Rotation
+Field-level encryption for sensitive database values (e.g. GitHub OAuth access tokens) uses `cryptography.fernet`:
+- **Authenticated Encryption**: Uses AES-128 in CBC mode with PKCS7 padding and HMAC-SHA256 authentication.
+- **Transparent MultiFernet Rotation**: When `ENCRYPTION_KEY` contains comma-separated keys (`PRIMARY_KEY,OLD_KEY_1,OLD_KEY_2`), `get_fernet()` returns a `MultiFernet` instance.
+- **Write-Forward, Read-Backward**: New tokens are always encrypted with the primary (first) key, while tokens encrypted under previous keys continue to decrypt transparently without downtime or data corruption.
+- **Rotation Helper**: `rotate_encrypted_value()` safely re-encrypts old ciphertexts under the active primary key.
+
+---
+
+### 16.6 Server-Side Repository Permissions Enforcement
+To prevent unauthorized users or compromised clients from creating Pull Requests via direct API calls:
+- **Server-Side Verification**: `create_remediation_pr` verifies that the caller owns the project and queries GitHub's repository metadata endpoint (`GET /repos/{owner}/{repo}`) using the decrypted user OAuth token.
+- **Push / Admin Gate**: The service validates that `permissions.push` or `permissions.admin` is explicitly `True`.
+- **Defense in Depth**: Even if internal services call `GitHubService.create_pr()`, the method itself inspects repository permissions before dispatching any `POST /repos/{owner}/{repo}/pulls` request, raising `PermissionError` (HTTP 403) for read-only or unauthorized users.
