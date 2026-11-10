@@ -23,6 +23,7 @@ Policy rules:
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 import re
 from typing import Any, Dict, List, Optional, Tuple
@@ -42,6 +43,62 @@ APPROVED_IMAGE_PREFIXES = (
     "alpine:",
     "sentinelx-app-",
 )
+
+
+def _extract_assessment_id(name: str) -> str:
+    """Extract the assessment id from a sentinelx-*-<assessment_id> resource name."""
+    parts = name.split("-")
+    if len(parts) < 3:
+        raise BrokerError(
+            f"Resource name '{name}' is missing assessment id.", status_code=400
+        )
+    return parts[-1]
+
+
+class ResourceRegistry:
+    """Tracks ownership of broker-managed Docker resources.
+
+    Maps resource names to assessment IDs to enforce cross-assessment
+    authorization: a worker cannot stop, delete, or inspect a resource it
+    did not create. Thread-safe for use across FastAPI's threadpool workers.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._resources: dict[str, str] = {}  # resource_name -> assessment_id
+
+    def register(self, resource_name: str, assessment_id: str) -> None:
+        """Register a newly created resource under its owning assessment."""
+        with self._lock:
+            self._resources[resource_name] = assessment_id
+
+    def lookup(self, resource_name: str) -> Optional[str]:
+        """Return the assessment id that owns the resource, or None if unknown."""
+        with self._lock:
+            return self._resources.get(resource_name)
+
+    def remove(self, resource_name: str) -> None:
+        """Drop a resource from the registry after deletion."""
+        with self._lock:
+            self._resources.pop(resource_name, None)
+
+    def verify_same_assessment(self, names: list[str]) -> Optional[str]:
+        """Return the common assessment id if all names resolve to one owner.
+
+        Returns None if any name is unknown or if they belong to different
+        assessments.
+        """
+        with self._lock:
+            ids = {
+                self._resources.get(name) for name in names if name in self._resources
+            }
+            if len(ids) == 1:
+                return ids.pop()
+            return None
+
+
+# Module-level registry shared by all broker endpoints.
+resource_registry = ResourceRegistry()
 
 
 def validate_resource_name(name: str, label: str) -> str:
@@ -100,20 +157,14 @@ def validate_build_network_mode(network_mode: str) -> str:
     return network_mode
 
 
-def validate_container_run_request(
-    container_name: str,
-    image_tag: str,
-    network_name: str,
-    app_port: int,
-    host_port: int,
-) -> Tuple[str, str, str, int, int]:
-    """
-    Validate a container run request and return the normalized values.
+def validate_container_names(
+    container_name: str, image_tag: str, network_name: str
+) -> Tuple[str, str, str]:
+    """Validate resource names for container operations.
 
-    Rejects:
-    - Names that don't follow the sentinelx-*-<assessment> policy
-    - Mismatched assessment ids across container/image/network
-    - Unsafe port values
+    Used by both container/run and cleanup. Does NOT validate ports (cleanup
+    does not supply meaningful port values). Enforces that all three names
+    reference the same assessment id.
     """
     validate_resource_name(container_name, "container_name")
     validate_resource_name(image_tag, "image_tag")
@@ -121,24 +172,55 @@ def validate_container_run_request(
     validate_image_tag(image_tag)
 
     # All three names must reference the same assessment id.
-    def _assessment_id(name: str) -> str:
-        return name.split("-")[-1]
-
-    ids = {
-        _assessment_id(container_name),
-        _assessment_id(image_tag),
-        _assessment_id(network_name),
-    }
-    if len(ids) != 1:
+    aid_container = _extract_assessment_id(container_name)
+    aid_image = _extract_assessment_id(image_tag)
+    aid_network = _extract_assessment_id(network_name)
+    if not (aid_container == aid_image == aid_network):
         raise BrokerError(
             "container_name, image_tag, and network_name must reference the same assessment.",
             status_code=400,
         )
 
+    return container_name, image_tag, network_name
+
+
+def validate_container_run_request(
+    container_name: str,
+    image_tag: str,
+    network_name: str,
+    app_port: int,
+    host_port: int,
+) -> Tuple[str, str, str, int, int]:
+    """Validate a container run request including port ranges.
+
+    Delegates name validation to validate_container_names, then checks that
+    both ports are in the unprivileged range (1024-65535).
+    """
+    validate_container_names(container_name, image_tag, network_name)
+
     if not (1024 <= app_port <= 65535) or not (1024 <= host_port <= 65535):
         raise BrokerError("app_port and host_port must be in range 1024-65535.", status_code=400)
 
     return container_name, image_tag, network_name, app_port, host_port
+
+
+def assert_resource_owned(resource_name: str, expected_assessment_id: str) -> None:
+    """Reject the request if the resource is not owned by the expected assessment.
+
+    Raises BrokerError(404) if the resource was never created through the
+    broker, or if it belongs to a different assessment.
+    """
+    owner = resource_registry.lookup(resource_name)
+    if owner is None:
+        raise BrokerError(
+            f"Resource '{resource_name}' is not managed by this broker.",
+            status_code=404,
+        )
+    if owner != expected_assessment_id:
+        raise BrokerError(
+            f"Resource '{resource_name}' belongs to a different assessment.",
+            status_code=403,
+        )
 
 
 def build_docker_run_args(

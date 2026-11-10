@@ -11,6 +11,7 @@ testing without a configured key, but production must always require auth.
 
 from __future__ import annotations
 
+import hmac
 from fastapi import HTTPException, Request, status
 
 from app.core.config import get_settings
@@ -45,18 +46,8 @@ def _validate_broker_key(provided: str) -> None:
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Broker authentication is not configured.",
         )
-    if not provided or not _constant_time_compare(provided, expected):
+    if not provided or not hmac.compare_digest(provided, expected):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or missing broker API key.",
         )
-
-
-def _constant_time_compare(a: str, b: str) -> bool:
-    """Constant-time comparison to avoid timing attacks."""
-    if len(a) != len(b):
-        return False
-    result = 0
-    for x, y in zip(a, b, strict=False):
-        result |= ord(x) ^ ord(y)
-    return result == 0

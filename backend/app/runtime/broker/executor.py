@@ -8,13 +8,16 @@ timeouts and secret redaction.
 
 from __future__ import annotations
 
+import threading
 from typing import Any, Dict, Optional, Tuple
 
+from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.core.secret_redactor import redact
 from app.core.subprocess_utils import run_command
 
 logger = get_logger(__name__)
+settings = get_settings()
 
 
 class DockerExecutor:
@@ -25,12 +28,22 @@ class DockerExecutor:
     narrow set of operations SENTINEL-X requires, each with timeouts.
     """
 
-    def __init__(self, timeout_build: int = 180, timeout_run: int = 20,
-                 timeout_network: int = 10, timeout_cleanup: int = 15) -> None:
+    def __init__(
+        self,
+        timeout_build: int = 180,
+        timeout_run: int = 20,
+        timeout_network: int = 10,
+        timeout_cleanup: int = 15,
+        max_concurrent_builds: int = 2,
+    ) -> None:
         self.timeout_build = timeout_build
         self.timeout_run = timeout_run
         self.timeout_network = timeout_network
         self.timeout_cleanup = timeout_cleanup
+        # F-4: bound concurrent builds to prevent resource exhaustion.
+        self._build_semaphore = threading.Semaphore(
+            max_concurrent_builds or settings.BROKER_MAX_CONCURRENT_BUILDS
+        )
 
     def is_available(self) -> Tuple[bool, str]:
         """Return (available, message) for the Docker daemon."""
@@ -47,17 +60,31 @@ class DockerExecutor:
         image_tag: str,
         dockerfile_path: Optional[str] = None,
     ) -> Tuple[bool, str]:
-        """Build an image using hardened build args (never --network=host)."""
+        """Build an image using hardened build args (never --network=host).
+
+        F-4: Acquires a bounded semaphore so that concurrent build requests
+        cannot exhaust broker or host resources. Callers block until a build
+        slot becomes available.
+        """
         from app.runtime.broker.policy import build_docker_build_args
 
-        args = build_docker_build_args(workspace_path, image_tag, dockerfile_path)
-        res = run_command(
-            args,
-            timeout_seconds=self.timeout_build,
-            tool_name="docker-build",
-            cwd=workspace_path,
-        )
-        return res.succeeded, redact(res.stdout + "\n" + res.stderr)
+        acquired = self._build_semaphore.acquire(timeout=self.timeout_build)
+        if not acquired:
+            return False, (
+                f"Build concurrency limit reached "
+                f"({settings.BROKER_MAX_CONCURRENT_BUILDS} max concurrent builds); try again later."
+            )
+        try:
+            args = build_docker_build_args(workspace_path, image_tag, dockerfile_path)
+            res = run_command(
+                args,
+                timeout_seconds=self.timeout_build,
+                tool_name="docker-build",
+                cwd=workspace_path,
+            )
+            return res.succeeded, redact(res.stdout + "\n" + res.stderr)
+        finally:
+            self._build_semaphore.release()
 
     def create_network(self, network_name: str, internal: bool = True) -> Tuple[bool, str]:
         """Create a dedicated network (internal by default)."""

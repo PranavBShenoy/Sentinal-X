@@ -17,6 +17,11 @@ from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.runtime.broker.auth import validate_broker_key_header
 from app.runtime.broker.executor import DockerExecutor
+from app.runtime.broker.policy import (
+    _extract_assessment_id,
+    assert_resource_owned,
+    resource_registry,
+)
 from app.runtime.broker.schemas import (
     BrokerError,
     BuildRequest,
@@ -95,6 +100,10 @@ def broker_build(
             message="Docker image build failed.",
             data={"log": log[:500]},
         )
+    # Register image under its owning assessment for cross-assessment authorization.
+    resource_registry.register(
+        request.image_tag, _extract_assessment_id(request.image_tag)
+    )
     return BrokerResponse(
         ok=True,
         status="built",
@@ -122,6 +131,10 @@ def broker_network_create(
             message="Failed to create isolated internal network.",
             data={"log": log[:500]},
         )
+    # Register network under its owning assessment.
+    resource_registry.register(
+        request.network_name, _extract_assessment_id(request.network_name)
+    )
     return BrokerResponse(
         ok=True,
         status="network_created",
@@ -166,6 +179,11 @@ def broker_container_run(
             message="Failed to start hardened container.",
             data={"log": log[:500]},
         )
+    # Register all three resources under their owning assessment.
+    assessment_id = _extract_assessment_id(request.container_name)
+    resource_registry.register(request.container_name, assessment_id)
+    resource_registry.register(request.image_tag, assessment_id)
+    resource_registry.register(request.network_name, assessment_id)
     return BrokerResponse(
         ok=True,
         status="running",
@@ -190,6 +208,7 @@ def broker_container_logs(
     from app.runtime.broker.policy import validate_resource_name
 
     validate_resource_name(container_name, "container_name")
+    assert_resource_owned(container_name, _extract_assessment_id(container_name))
     logs = executor.get_logs(container_name)
     return {"container_name": container_name, "logs": logs}
 
@@ -204,7 +223,10 @@ def broker_container_stop(
     from app.runtime.broker.policy import validate_resource_name
 
     validate_resource_name(container_name, "container_name")
+    assert_resource_owned(container_name, _extract_assessment_id(container_name))
     ok, log = executor.stop_container(container_name)
+    if ok:
+        resource_registry.remove(container_name)
     return BrokerResponse(
         ok=ok,
         status="stopped" if ok else "stop_failed",
@@ -223,7 +245,10 @@ def broker_container_remove(
     from app.runtime.broker.policy import validate_resource_name
 
     validate_resource_name(container_name, "container_name")
+    assert_resource_owned(container_name, _extract_assessment_id(container_name))
     ok, log = executor.remove_container(container_name)
+    if ok:
+        resource_registry.remove(container_name)
     return BrokerResponse(
         ok=ok,
         status="removed" if ok else "remove_failed",
@@ -242,7 +267,10 @@ def broker_network_remove(
     from app.runtime.broker.policy import validate_resource_name
 
     validate_resource_name(network_name, "network_name")
+    assert_resource_owned(network_name, _extract_assessment_id(network_name))
     ok, log = executor.remove_network(network_name)
+    if ok:
+        resource_registry.remove(network_name)
     return BrokerResponse(
         ok=ok,
         status="removed" if ok else "remove_failed",
@@ -261,7 +289,10 @@ def broker_image_remove(
     from app.runtime.broker.policy import validate_image_tag
 
     validate_image_tag(image_tag)
+    assert_resource_owned(image_tag, _extract_assessment_id(image_tag))
     ok, log = executor.remove_image(image_tag)
+    if ok:
+        resource_registry.remove(image_tag)
     return BrokerResponse(
         ok=ok,
         status="removed" if ok else "remove_failed",
@@ -281,23 +312,34 @@ def broker_cleanup(
     All steps are attempted even if earlier ones fail.
     """
     validate_broker_key_header(x_broker_key)
-    from app.runtime.broker.policy import (
-        validate_container_run_request,
-    )
+    from app.runtime.broker.policy import validate_container_names
 
-    validate_container_run_request(
+    validate_container_names(
         container_name=request.container_name,
         image_tag=request.image_tag,
         network_name=request.network_name,
-        app_port=0,  # not used for cleanup; schema requires it
-        host_port=0,  # not used for cleanup; schema requires it
     )
+    # Cross-assessment authorization: all three resources must belong to
+    # the same owning assessment, and each must exist in the registry.
+    assessment_id = resource_registry.verify_same_assessment(
+        [request.container_name, request.network_name, request.image_tag]
+    )
+    if assessment_id is None:
+        raise BrokerError(
+            "Cleanup rejected: resources are unknown or belong to different assessments.",
+            status_code=403,
+        )
 
     results = executor.cleanup(
         container_name=request.container_name,
         network_name=request.network_name,
         image_tag=request.image_tag,
     )
+    # Remove from registry regardless of individual step success; the caller
+    # has requested teardown and the broker should not keep stale ownership records.
+    resource_registry.remove(request.container_name)
+    resource_registry.remove(request.network_name)
+    resource_registry.remove(request.image_tag)
     all_ok = all(step.get("ok") for step in results.values())
     return BrokerResponse(
         ok=all_ok,

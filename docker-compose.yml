@@ -67,7 +67,7 @@ services:
       - CORS_ORIGINS=${CORS_ORIGINS:-["http://localhost:3000","http://127.0.0.1:3000","http://localhost:8000"]}
       # API talks to the runtime broker for cleanup on assessment cancellation.
       - BROKER_URL=${BROKER_URL:-http://broker:8001}
-      - BROKER_API_KEY=${BROKER_API_KEY:-change-me-in-production}
+      - BROKER_API_KEY=${BROKER_API_KEY:?BROKER_API_KEY must be set explicitly; no default}
       - BROKER_AUTH_REQUIRED=${BROKER_AUTH_REQUIRED:-true}
     depends_on:
       postgres:
@@ -80,6 +80,7 @@ services:
       - reports_data:/var/lib/sentinelx/reports
     networks:
       - sentinelx-internal
+      - sentinelx-broker
       - sentinelx-public
 
   worker:
@@ -103,7 +104,7 @@ services:
       # The worker does NOT mount the Docker socket. It talks to the runtime
       # broker over authenticated HTTP. BROKER_API_KEY must match the broker's.
       - BROKER_URL=${BROKER_URL:-http://broker:8001}
-      - BROKER_API_KEY=${BROKER_API_KEY:-change-me-in-production}
+      - BROKER_API_KEY=${BROKER_API_KEY:?BROKER_API_KEY must be set explicitly; no default}
       - BROKER_AUTH_REQUIRED=${BROKER_AUTH_REQUIRED:-true}
     depends_on:
       postgres:
@@ -120,6 +121,7 @@ services:
       - reports_data:/var/lib/sentinelx/reports
     networks:
       - sentinelx-internal
+      - sentinelx-broker
 
   # ---------------------------------------------------------------------------
   # Runtime Broker — policy-enforcing Docker boundary.
@@ -133,7 +135,7 @@ services:
     restart: unless-stopped
     environment:
       - ENVIRONMENT=${ENVIRONMENT:-development}
-      - BROKER_API_KEY=${BROKER_API_KEY:-change-me-in-production}
+      - BROKER_API_KEY=${BROKER_API_KEY:?BROKER_API_KEY must be set explicitly; no default}
       - BROKER_AUTH_REQUIRED=${BROKER_AUTH_REQUIRED:-true}
       - ASSESSMENT_WORKSPACE_BASE=${ASSESSMENT_WORKSPACE_BASE:-/var/lib/sentinelx/workspaces}
       - BUILD_NETWORK_MODE=${BUILD_NETWORK_MODE:-none}
@@ -143,16 +145,16 @@ services:
     ports:
       # Loopback-only: the broker is consumed by same-host workers/api only.
       - "127.0.0.1:8001:8001"
-    depends_on:
-      redis:
-        condition: service_healthy
     volumes:
       # [!WARNING] The broker is the ONLY service with host Docker socket access.
       # It is a trusted policy-enforcement component. Mount read-only.
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./rules:/app/rules:ro
     networks:
-      - sentinelx-internal
+      # F-8: Broker is on a dedicated network separate from postgres/redis.
+      # It only needs to reach the API and worker, never the control-plane
+      # datastore or queue.
+      - sentinelx-broker
 
   frontend:
     build:
@@ -177,6 +179,10 @@ volumes:
 
 networks:
   sentinelx-internal:
+    internal: true
+  sentinelx-broker:
+    # F-8: Dedicated network for broker <-> worker/api communication.
+    # The broker is NOT on sentinelx-internal, so it cannot reach postgres/redis.
     internal: true
   sentinelx-public:
     driver: bridge

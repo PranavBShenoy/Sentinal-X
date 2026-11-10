@@ -151,6 +151,9 @@ class Settings(BaseSettings):
     BROKER_CPUS: str = "1.0"
     BROKER_PIDS_LIMIT: int = 100
     BROKER_TMPFS_SIZE: str = "64m"
+    # Maximum number of concurrent image builds the broker will run.
+    # Builds are memory/CPU-bound; unbounded concurrency is a DoS vector.
+    BROKER_MAX_CONCURRENT_BUILDS: int = 2
 
     # ------------------------------------------------------------------ #
     # Rate limiting
@@ -169,6 +172,28 @@ class Settings(BaseSettings):
             )
         if len(v) < 32:
             raise ValueError("JWT_SECRET must be at least 32 characters")
+        return v
+
+    @field_validator("BROKER_API_KEY")
+    @classmethod
+    def check_broker_api_key(cls, v: str, info) -> str:
+        """Validate broker API key strength in production.
+
+        In production, an empty or weak key is rejected outright (fail closed).
+        In development, an empty key is permitted only when
+        BROKER_AUTH_REQUIRED=False.
+        """
+        app_env = info.data.get("APP_ENV", "development")
+        if app_env == "production":
+            if not v:
+                raise ValueError(
+                    "BROKER_API_KEY is required in production. "
+                    "Generate one with: python3 -c 'import secrets; print(secrets.token_hex(32))'"
+                )
+            if len(v) < 32:
+                raise ValueError(
+                    "BROKER_API_KEY must be at least 32 characters in production."
+                )
         return v
 
 

@@ -15,9 +15,9 @@ import os
 import tempfile
 from pathlib import Path
 
+import hmac as _hmac
 import pytest
 from app.core.config import get_settings
-from app.runtime.broker.auth import _constant_time_compare
 from app.runtime.broker.policy import (
     build_docker_build_args,
     build_docker_run_args,
@@ -66,29 +66,24 @@ def test_validate_workspace_path_rejects_symlink_escape():
 
 
 # ---------------------------------------------------------------------------
-# Timing side channel in key comparison
+# Timing side channel in key comparison (F-2: FIXED with hmac.compare_digest)
 # ---------------------------------------------------------------------------
 
-def test_constant_time_compare_leaks_key_length():
-    """
-    ``_constant_time_compare`` returns False immediately when lengths differ,
-    leaking the length of the expected key via a timing side channel.
 
-    An attacker can measure response time to determine len(key), then
-    brute-force each byte. This is a known weakness of naive constant-time
-    comparisons that short-circuit on length mismatch.
+def test_hmac_compare_digest_constant_time_no_length_leak():
     """
-    expected = "a" * 32  # 32-char key
-    # Different length returns immediately (fast path)
+    ``hmac.compare_digest`` does NOT short-circuit on length mismatch.
+
+    Unlike the previous custom `_constant_time_compare`, it compares
+    full-length digests, so an attacker cannot measure response time to
+    determine len(BROKER_API_KEY).
+    """
+    expected = "a" * 32
     short = "a" * 16
-    result_short = _constant_time_compare(short, expected)
-    assert result_short is False
-    # Same length but different content takes the slow path
     same_len_wrong = "b" * 32
-    result_wrong = _constant_time_compare(same_len_wrong, expected)
-    assert result_wrong is False
-    # The length-mismatch early return is the side-channel vector:
-    # len(short) != len(expected) is detectable via timing.
+    assert _hmac.compare_digest(short, expected) is False
+    assert _hmac.compare_digest(same_len_wrong, expected) is False
+    assert _hmac.compare_digest(expected, expected) is True
 
 
 # ---------------------------------------------------------------------------
