@@ -7,7 +7,7 @@ This document records the exact test execution evidence, verification logs, and 
 ## 1. Full Pytest Suite Execution Summary
 
 - **Test Suite Command**: `PYTHONPATH=backend python3 -m pytest backend/tests/ -v`
-- **Result**: **97 PASSED**, **1 SKIPPED**, **0 FAILED** (98 total collected items) in 69.05 seconds.
+- **Result**: **100 PASSED**, **1 SKIPPED**, **0 FAILED** (101 total collected items) in 70.57 seconds.
 
 ### Test Breakdown by Subsystem
 
@@ -18,7 +18,7 @@ This document records the exact test execution evidence, verification logs, and 
 | **Live Scanners** | `tests/integration/test_live_scanners.py` | 10 | **PASSED** | Live Semgrep (SQLi), Gitleaks (Masking), Syft, Grype (CVEs), Trivy, OSV (v2.7.1), Native DAST (11 check categories), Deduplication. |
 | **Assessments API** | `tests/integration/test_assessments_api.py` | 4 | **PASSED** | Pipeline launch, progress endpoint, Anti-SSRF loopback & cloud metadata rejection. |
 | **Auth API** | `tests/integration/test_auth_api.py` | 7 | **PASSED** | Registration, duplicate email rejection, weak password rejection, login, invalid password, `/me` profile. |
-| **Docker Isolation** | `tests/integration/test_docker_runtime_isolation.py` | 3 | **2 PASSED, 1 SKIPPED** | Verified non-root Dockerfile generation, `--cap-drop=ALL`, `--security-opt=no-new-privileges`. Live container test cleanly skipped in container sandbox. |
+| **Docker Isolation** | `tests/integration/test_docker_runtime_isolation.py` | 6 | **5 PASSED, 1 SKIPPED** | Verified non-root Dockerfile generation, `--cap-drop=ALL`, `--security-opt=no-new-privileges`, `--internal` network creation, failure handling (build/start/health), workspace cleanup lifecycle. Live container test cleanly skipped in container sandbox (`INFRA-01: BLOCKED`). |
 | **E2E Pipeline** | `tests/integration/test_e2e_pipeline.py` | 1 | **PASSED** | Full backend pipeline execution on `vuln_sqli` fixture. |
 | **Findings & Reports** | `tests/integration/test_findings_and_reports.py` | 5 | **PASSED** | Severity filtering, disposition updates, dependency graph endpoint, JSON report, SARIF report. |
 | **Projects API** | `tests/integration/test_projects_api.py` | 4 | **PASSED** | CRUD, pagination, cross-user isolation, cascading delete. |
@@ -43,9 +43,9 @@ This document records the exact test execution evidence, verification logs, and 
 ### Bandit Security Scan
 - **Command**: `bandit -r backend/app/ -ll -ii`
 - **Result**: `No issues identified.`
-  - Total lines of code: 9,015
+  - Total lines of code: 9,018
   - Total issues (Medium/High severity): **0**
 
 ### Frontend Production Build
 - **Command**: `cd frontend && npm run build`
-- **Result**: `✓ built in 2.61s` (1,508 modules transformed, 0 TypeScript errors, clean Vite production assets).
+- **Result**: `✓ built in 2.57s` (1,508 modules transformed, 0 TypeScript errors, clean Vite production assets).

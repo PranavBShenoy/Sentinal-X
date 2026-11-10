@@ -186,16 +186,15 @@ class RuntimeOrchestrator:
 
     def cleanup(self, assessment_id: str) -> None:
         """Stop and remove all containers and networks for an assessment."""
+        network_id = None
         with db_session() as db:
             env = (
                 db.query(RuntimeEnvironment)
                 .filter(RuntimeEnvironment.assessment_id == assessment_id)
                 .first()
             )
-            if not env:
-                return
-
-            network_id = env.network_id
+            if env:
+                network_id = env.network_id
 
         container_name = f"sentinelx-cont-{assessment_id.lower()[:12]}"
         image_tag = f"sentinelx-app-{assessment_id.lower()[:12]}"
@@ -254,12 +253,16 @@ class RuntimeOrchestrator:
         """Start container with strictly enforced isolation boundaries."""
         # Clean up any leftover container with the same name first
         run_command(["docker", "rm", "-f", container_name], timeout_seconds=10, tool_name="docker-rm-stale")
+        # Ensure dedicated isolated internal network (no external outbound internet or metadata egress)
+        run_command(["docker", "network", "rm", network_name], timeout_seconds=10, tool_name="docker-net-rm-stale")
+        run_command(["docker", "network", "create", "--internal", network_name], timeout_seconds=10, tool_name="docker-net-create")
 
         app_port = profile.port or 8000
         # Map to an available dynamic host port
         host_port = self._find_available_port()
 
         # STRICT ISOLATION CONTROLS:
+        # - network=<network_name> (--internal prevents all outbound egress to LAN/WAN/metadata)
         # - cap-drop=ALL (drop all Linux kernel capabilities)
         # - security-opt=no-new-privileges:true (prevent setuid privilege escalation)
         # - memory=512m (RAM limit against resource exhaustion)
@@ -273,6 +276,7 @@ class RuntimeOrchestrator:
             "run",
             "-d",
             f"--name={container_name}",
+            f"--network={network_name}",
             "--cap-drop=ALL",
             "--security-opt=no-new-privileges:true",
             "--read-only",
