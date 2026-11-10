@@ -255,7 +255,10 @@ class RuntimeOrchestrator:
         run_command(["docker", "rm", "-f", container_name], timeout_seconds=10, tool_name="docker-rm-stale")
         # Ensure dedicated isolated internal network (no external outbound internet or metadata egress)
         run_command(["docker", "network", "rm", network_name], timeout_seconds=10, tool_name="docker-net-rm-stale")
-        run_command(["docker", "network", "create", "--internal", network_name], timeout_seconds=10, tool_name="docker-net-create")
+        net_res = run_command(["docker", "network", "create", "--internal", network_name], timeout_seconds=10, tool_name="docker-net-create")
+        if not net_res.succeeded:
+            safe_err = redact(net_res.stdout + "\n" + net_res.stderr)
+            return False, None, f"Failed to create isolated internal network: {safe_err[:300]}"
 
         app_port = profile.port or 8000
         # Map to an available dynamic host port

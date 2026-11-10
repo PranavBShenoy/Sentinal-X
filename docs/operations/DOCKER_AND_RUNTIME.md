@@ -20,6 +20,7 @@ flowchart TD
         ResourceCaps["cgroups: 512MB RAM, 1.0 CPU, 100 PIDs"]
         ReadOnlyRoot["Read-Only Root Filesystem + 64MB noexec tmpfs"]
         InternalNet["Dedicated Bridge Network (--internal, No Egress)"]
+        LoopbackOnly["Loopback Port Forwarding (127.0.0.1:port)"]
     end
 
     Host --> DockerDaemon
@@ -35,36 +36,64 @@ SENTINEL-X validates runtime security across nine critical isolation dimensions:
 
 | # | Isolation Dimension | Enforcement Mechanism | Implementation Location | Verified Behavior |
 |---|---------------------|------------------------|-------------------------|-------------------|
-| **1** | **Non-Root Execution** | `USER 10001:10001` (`appuser`) for Python; `USER node` for Node.js | `app/runtime/dockerfile_generator.py` | Container process runs with non-zero UID/GID; root execution is rejected. |
+| **1** | **Non-Root Execution** | `USER 10001:10001` (`appuser`) for Python; `USER node` for Node.js | `app/runtime/docker/orchestrator.py` (`_generate_dockerfile`) | Container process runs with non-zero UID/GID; root execution is rejected. |
 | **2** | **Dropped Linux Capabilities** | `--cap-drop=ALL` | `app/runtime/docker/orchestrator.py` | All kernel capabilities (`CAP_SYS_ADMIN`, `CAP_NET_RAW`, `CAP_NET_ADMIN`, etc.) are dropped. |
 | **3** | **No-New-Privileges** | `--security-opt=no-new-privileges:true` | `app/runtime/docker/orchestrator.py` | Prevents setuid/setgid binaries and child processes from escalating privileges. |
 | **4** | **Resource Quotas (cgroups)** | `--memory=512m`, `--cpus=1.0`, `--pids-limit=100` | `app/runtime/docker/orchestrator.py` | Prevents RAM exhaustion, CPU starvation, and fork bomb attacks. |
-| **5** | **Filesystem Restrictions** | `--read-only`, `--tmpfs=/tmp:rw,noexec,nosuid,size=64m` | `app/runtime/docker/orchestrator.py` | Container filesystem is immutable; temporary files cannot execute binary payloads. |
+| **5** | **Filesystem Restrictions** | `--read-only`, `--tmpfs=/tmp:rw,noexec,nosuid,size=64m` | `app/runtime/docker/orchestrator.py`, `app/runtime/cleanup/workspace_cleaner.py` | Container filesystem is immutable; temporary files cannot execute binary payloads; workspace cleaner purges expired data. |
 | **6** | **Network Isolation & Egress Prevention** | Dedicated network per container created with `--internal` | `app/runtime/docker/orchestrator.py` | Docker iptables rules drop all forwarding to WAN and non-local LAN subnets; no external outbound connectivity. |
 | **7** | **Host & Metadata Access Prevention** | Zero host mounts (`-v`/`--volume` absent); socket unmounted; loopback-only bind (`-p=127.0.0.1:port`) | `app/runtime/docker/orchestrator.py` | Host filesystem and Docker daemon socket are inaccessible; cloud metadata (`169.254.169.254`) unreachable via internal network. |
-| **8** | **Timeout, Cancellation & Cleanup** | Forced container and network cleanup via `docker rm -f`, `docker network rm`, `docker rmi` | `app/runtime/docker/orchestrator.py`, `app/runtime/cleanup/workspace_cleaner.py` | Deterministic teardown on assessment completion, failure, timeout, or manual cancellation. |
+| **8** | **Timeout, Cancellation & Cleanup** | Forced container and network cleanup via `docker rm -f`, `docker network rm`, `docker rmi` | `app/runtime/docker/orchestrator.py` | Deterministic teardown on assessment completion, failure, timeout, or manual cancellation. |
 | **9** | **Failure Stage Resilience** | Handlers for build failure, startup failure, and health probe timeout | `app/runtime/docker/orchestrator.py` | Failures transition state to `FAILED` or `HEALTH_CHECK_FAILED` with resource reclamation. |
 
 ---
 
-## 3. Host Environment Diagnostic & Status Classification
+## 3. Docker Network Security & Boundary Analysis
 
-### Host Verification
-When assessing runtime isolation on the current environment:
-- **Docker Socket**: `/var/run/docker.sock` exists on the host.
-- **Socket Permissions**: `srw-rw---- 1 root docker`.
-- **Executing User**: User `pranav` (UID 1000) is not a member of the host `docker` group (GID 963).
-- **Sudo Policy**: Passwordless `sudo` is not permitted in this execution environment.
+### Dedicated Internal Network Architecture
+To isolate each target container, `RuntimeOrchestrator` generates a deterministic network identifier `sentinelx-net-{assessment_id}` and provisions it via:
+```bash
+docker network create --internal sentinelx-net-{assessment_id}
+```
+The `--internal` flag modifies Docker's default bridge routing:
+1. **Disables External Gateway Routing**: Docker omits the default MASQUERADE iptables rules for the bridge interface.
+2. **Drops Forwarding**: In the `FORWARD` filter chain, all outgoing packets from the bridge subnet to external physical interfaces are dropped (`DOCKER-ISOLATION-STAGE-1` / `DOCKER-FORWARD`).
+3. **No Default Bridge Fallback**: In `_start_container`, `net_res = run_command(["docker", "network", "create", ...])` is validated before launching the container. If network creation fails, container startup immediately aborts; the container is never launched on the default bridge network.
 
-### Status Classification: `INFRA-01: BLOCKED`
-Because the user does not have read/write access to `/var/run/docker.sock`:
-- **Code Hardening & Isolation Constraints**: **VERIFIED** via unit and integration tests (`backend/tests/integration/test_docker_runtime_isolation.py`).
-- **Live Container Execution on Host**: **BLOCKED** (`INFRA-01: BLOCKED: Cannot connect to Docker daemon: permission denied on /var/run/docker.sock`).
-- **System Resilience**: Static scanners (Semgrep, Gitleaks, Syft, Grype, Trivy, OSV) and assessment workflows run cleanly without crashing or hanging when Docker is unavailable.
+### Unintended Host Service Exposure Risk on Internal Bridges
+While `--internal` completely eliminates forwarding to external IP addresses (the `FORWARD` chain), security architects must recognize an important nuance of Linux network filtering:
+- **Bridge Gateway IP in Host `INPUT` Chain**: The host interface for the bridge is assigned a local IP (e.g., `172.18.0.1`). Packets sent by a container to this gateway IP traverse the host kernel's `INPUT` chain, not the `FORWARD` chain.
+- **Risk**: Any host daemon listening on `0.0.0.0` (wildcard) is accessible to containers on that bridge unless host firewall rules explicitly filter traffic from `br-+` interfaces.
+- **SENTINEL-X Mitigations**:
+  1. Internal platform dependencies (PostgreSQL, Redis) are configured to bind exclusively to `127.0.0.1` or unix domain sockets (`/tmp/redis.sock`), never `0.0.0.0`.
+  2. `--cap-drop=ALL` inside the container prevents raw socket creation, network spoofing, and interface sniffing.
+  3. Production hardening recommendation: Add `iptables -I INPUT -i br-+ -p tcp -m multiport --dports 22,5432,6379 -j DROP` on dedicated scanner hosts.
+
+### Port Binding Security & Analysis
+- **Why Published Ports are Required**: SENTINEL-X dynamic scanners (HTTP health probes, DAST scanners, and dependency explorers) must communicate with the target application to analyze endpoint behaviors, headers, and vulnerabilities.
+- **Loopback Enforcement**: Dynamic ports are bound exclusively to the host loopback interface:
+  ```bash
+  -p=127.0.0.1:{host_port}:{app_port}
+  ```
+  The orchestrator strictly rejects wildcard (`0.0.0.0`) or unmapped port flags, ensuring the target application cannot be probed by external machines on the local LAN or WAN.
+- **Ordered Teardown**: Upon assessment completion, cancellation, or failure, resources are torn down in strict sequence:
+  1. `docker rm -f {container_name}` (terminates process and releases port binding)
+  2. `docker network rm {network_name}` (removes bridge and iptables chains)
+  3. `docker rmi {image_tag}` (reclaims disk space)
 
 ---
 
-## 4. Architectural Security Boundary Analysis: Containers vs. MicroVMs
+## 4. Deployment Topology Assessment
+
+| Deployment Topology | Architecture | Network Isolation Behavior | Operational Caveats |
+| :--- | :--- | :--- | :--- |
+| **1. Standalone Host / VM (Native Docker)** | SENTINEL-X worker runs on host VM with dockerd. | Verified. Each assessment gets dedicated `--internal` network. Cross-assessment communication is blocked. | Host services on `0.0.0.0` must be protected in the `INPUT` chain. |
+| **2. Docker Compose (DooD / Docker-outside-of-Docker)** | Worker container mounts `/var/run/docker.sock` to spawn sibling containers. | Target container is on `sentinelx-net-{id}`, completely isolated from Docker Compose network (`sentinelx-internal`). | Worker must communicate with target via host loopback port mapping or dedicated bridge proxy. |
+| **3. Kubernetes / Multi-Tenant Cloud** | Worker runs in Kubernetes Pod. | Docker CLI orchestration is not recommended; native Kubernetes `NetworkPolicy` (egress deny `0.0.0.0/0`) should be used. | Target applications should execute in ephemeral pods with hardware microVM runtimes (Kata Containers). |
+
+---
+
+## 5. Architectural Security Boundary Analysis: Containers vs. MicroVMs
 
 ### Is Docker Container Hardening Alone a Complete Security Boundary?
 

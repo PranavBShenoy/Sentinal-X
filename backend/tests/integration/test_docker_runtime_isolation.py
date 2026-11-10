@@ -132,6 +132,83 @@ def test_runtime_cleanup_resources():
         assert any("docker rmi sentinelx-app-" in cmd for cmd in flattened)
 
 
+def test_docker_network_creation_failure_defense():
+    """Verify that if network creation fails, docker run is aborted and no container starts."""
+    orchestrator = RuntimeOrchestrator()
+    profile = ProjectProfile(project_type="fastapi", port=8000, entry_point="main.py")
+
+    def mock_run_cmd_side_effect(args, **kwargs):
+        if len(args) >= 3 and args[0:3] == ["docker", "network", "create"]:
+            return MagicMock(succeeded=False, stdout="", stderr="Error response: subnet conflict")
+        return MagicMock(succeeded=True, stdout="", stderr="")
+
+    with patch("app.runtime.docker.orchestrator.run_command", side_effect=mock_run_cmd_side_effect) as mock_run:
+        ok, port, log = orchestrator._start_container(
+            container_name="test-c",
+            network_name="test-n",
+            image_tag="test-i",
+            profile=profile,
+        )
+
+        assert ok is False
+        assert port is None
+        assert "Failed to create isolated internal network" in log
+
+        # Assert that docker run was NEVER called
+        executed_cmds = [call.args[0] for call in mock_run.call_args_list]
+        flattened = [" ".join(c) for c in executed_cmds]
+        assert not any("docker run" in cmd for cmd in flattened), "docker run was called despite network creation failure!"
+
+
+def test_docker_port_binding_and_security():
+    """Verify dynamic port binding is strictly restricted to host loopback (127.0.0.1)."""
+    orchestrator = RuntimeOrchestrator()
+    profile = ProjectProfile(project_type="fastapi", port=8000, entry_point="main.py")
+
+    with patch("app.runtime.docker.orchestrator.run_command") as mock_run:
+        mock_run.return_value = MagicMock(succeeded=True, stdout="c123", stderr="")
+        ok, port, _ = orchestrator._start_container(
+            container_name="test-c",
+            network_name="test-n",
+            image_tag="test-i",
+            profile=profile,
+        )
+
+        assert ok is True
+        assert isinstance(port, int)
+        assert port > 1024
+
+        # Inspect the exact docker run command
+        run_calls = [call.args[0] for call in mock_run.call_args_list if call.args[0][0:2] == ["docker", "run"]]
+        assert len(run_calls) == 1
+        run_cmd = run_calls[0]
+
+        # Verify port parameter
+        port_flags = [arg for arg in run_cmd if arg.startswith("-p=")]
+        assert len(port_flags) == 1
+        port_flag = port_flags[0]
+
+        # Must bind to 127.0.0.1, never 0.0.0.0, never bare port
+        assert port_flag.startswith("-p=127.0.0.1:")
+        assert "0.0.0.0" not in port_flag  # noqa: S104
+        assert f":{profile.port}" in port_flag
+
+
+def test_teardown_order_on_cancellation_and_failure():
+    """Verify resource teardown sequence always removes container before network."""
+    orchestrator = RuntimeOrchestrator()
+    assessment_id = "test-teardown-order"
+
+    with patch("app.runtime.docker.orchestrator.run_command") as mock_run:
+        mock_run.return_value = MagicMock(succeeded=True)
+        orchestrator.cleanup(assessment_id)
+
+        cmds = [call.args[0][1] for call in mock_run.call_args_list if call.args[0][0] == "docker"]
+        assert cmds[0] == "rm", "Container must be removed before network"
+        assert cmds[1] == "network", "Network must be removed after container"
+        assert cmds[2] == "rmi", "Image must be removed after network"
+
+
 def test_workspace_cleaner_lifecycle():
     """Verify temporary workspace cleanup and expiration purge logic."""
     with tempfile.TemporaryDirectory() as tmp_dir:
