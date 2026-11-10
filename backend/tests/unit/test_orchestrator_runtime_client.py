@@ -184,3 +184,108 @@ def test_settings_runtime_mode_default_broker():
     """Default RUNTIME_MODE is broker (production-safe)."""
     settings = get_settings()
     assert settings.RUNTIME_MODE == "broker"
+
+
+# ---------------------------------------------------------------------------
+# Cleanup correctness
+# ---------------------------------------------------------------------------
+
+
+def test_cleanup_failure_does_not_mask_original_build_error():
+    """Build failure + cleanup failure → original build error is preserved.
+
+    The provision() return value must report the build error, not a cleanup
+    error, even when cleanup itself fails.
+    """
+    orchestrator, mock_client = _make_orchestrator_with_mock(
+        fail_build=True,
+        fail_cleanup=True,
+    )
+    with patch.object(orchestrator.detector, "detect") as mock_detect:
+        mock_detect.return_value = ProjectProfile(
+            project_type="fastapi", port=8000, entry_point="main.py"
+        )
+        res = orchestrator.provision("test-cleanup-masks-build", "/tmp")
+
+    # Original error must be the build failure, NOT a cleanup error.
+    assert res["status"] == RuntimeStatus.FAILED.value
+    assert res["error"] == "Build failed"
+    # Cleanup was still attempted (and failed), but did not mask the error.
+    cleanup_calls = [c for c in mock_client.calls if c["operation"] == "cleanup"]
+    assert cleanup_calls, "cleanup must be attempted even though it will fail"
+
+
+def test_cleanup_failure_does_not_mask_original_start_error():
+    """Start failure + cleanup failure → original start error is preserved."""
+    orchestrator, mock_client = _make_orchestrator_with_mock(
+        fail_build=False,
+        fail_start=True,
+        fail_cleanup=True,
+    )
+    with patch.object(orchestrator.detector, "detect") as mock_detect:
+        mock_detect.return_value = ProjectProfile(
+            project_type="fastapi", port=8000, entry_point="main.py"
+        )
+        res = orchestrator.provision("test-cleanup-masks-start", "/tmp")
+
+    assert res["status"] == RuntimeStatus.FAILED.value
+    assert res["error"] == "Start failed"
+    cleanup_calls = [c for c in mock_client.calls if c["operation"] == "cleanup"]
+    assert cleanup_calls
+
+
+def test_cleanup_failure_does_not_mask_health_check_error():
+    """Health check failure + cleanup failure → original health error preserved."""
+    orchestrator, mock_client = _make_orchestrator_with_mock(fail_cleanup=True)
+    with patch.object(orchestrator.detector, "detect") as mock_detect, \
+         patch.object(orchestrator, "_health_check", return_value=False), \
+         patch.object(orchestrator, "_get_container_logs", return_value="[simulated] logs"):
+        mock_detect.return_value = ProjectProfile(
+            project_type="fastapi", port=8000, entry_point="main.py"
+        )
+        res = orchestrator.provision("test-cleanup-masks-health", "/tmp")
+
+    assert res["status"] == RuntimeStatus.HEALTH_CHECK_FAILED.value
+    cleanup_calls = [c for c in mock_client.calls if c["operation"] == "cleanup"]
+    assert cleanup_calls
+
+
+def test_cleanup_is_idempotent():
+    """Calling cleanup twice does not raise; both calls complete."""
+    orchestrator, mock_client = _make_orchestrator_with_mock()
+
+    orchestrator.cleanup("test-idempotent")
+    first_cleanup_count = len(
+        [c for c in mock_client.calls if c["operation"] == "cleanup"]
+    )
+    assert first_cleanup_count == 1
+
+    orchestrator.cleanup("test-idempotent")
+    second_cleanup_count = len(
+        [c for c in mock_client.calls if c["operation"] == "cleanup"]
+    )
+    assert second_cleanup_count == 2
+
+
+def test_repeated_cleanup_after_partial_provisioning():
+    """Build succeeds, start fails, cleanup runs; repeated cleanup is idempotent."""
+    orchestrator, mock_client = _make_orchestrator_with_mock(fail_start=True)
+    with patch.object(orchestrator.detector, "detect") as mock_detect:
+        mock_detect.return_value = ProjectProfile(
+            project_type="fastapi", port=8000, entry_point="main.py"
+        )
+        res = orchestrator.provision("test-repeated-cleanup", "/tmp")
+
+    assert res["status"] == RuntimeStatus.FAILED.value
+    # First cleanup ran as part of the provisioning failure path.
+    first_cleanup_count = len(
+        [c for c in mock_client.calls if c["operation"] == "cleanup"]
+    )
+    assert first_cleanup_count == 1
+
+    # Explicit repeated cleanup should not raise and should add another call.
+    orchestrator.cleanup("test-repeated-cleanup")
+    second_cleanup_count = len(
+        [c for c in mock_client.calls if c["operation"] == "cleanup"]
+    )
+    assert second_cleanup_count == 2

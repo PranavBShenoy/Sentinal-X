@@ -174,3 +174,54 @@ def test_runtime_mode_broker_allowed_in_production():
 def test_runtime_mode_defaults_to_broker():
     settings = get_settings()
     assert settings.RUNTIME_MODE == "broker"
+
+
+def test_runtime_mode_simulated_rejected_via_env_vars_in_production(monkeypatch):
+    """Env-var-driven production startup rejects simulated mode.
+
+    This is the actual startup path used by Docker Compose: env vars are
+    loaded into Settings, and the field validator must reject
+    RUNTIME_MODE=simulated when APP_ENV=production.
+    """
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("RUNTIME_MODE", "simulated")
+    monkeypatch.setenv("BROKER_API_KEY", "a" * 32)
+    # Clear the lru_cache so Settings() re-reads environment variables.
+    get_settings.cache_clear()
+    try:
+        with pytest.raises(ValueError, match="not allowed in production"):
+            Settings()
+    finally:
+        get_settings.cache_clear()
+
+
+def test_runtime_mode_broker_allowed_via_env_vars_in_production(monkeypatch):
+    """Env-var-driven production startup accepts RUNTIME_MODE=broker."""
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("RUNTIME_MODE", "broker")
+    monkeypatch.setenv("BROKER_API_KEY", "a" * 32)
+    get_settings.cache_clear()
+    try:
+        settings = Settings()
+        assert settings.RUNTIME_MODE == "broker"
+    finally:
+        get_settings.cache_clear()
+
+
+def test_get_settings_rejects_simulated_in_production_via_env_vars(monkeypatch):
+    """get_settings() (used by the orchestrator's default constructor)
+    rejects simulated mode in production when driven by environment variables.
+
+    This is the actual startup path: Docker Compose sets APP_ENV and
+    RUNTIME_MODE as env vars; Settings() must reject simulated mode in
+    production before any orchestrator can be auto-configured.
+    """
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("RUNTIME_MODE", "simulated")
+    monkeypatch.setenv("BROKER_API_KEY", "a" * 32)
+    get_settings.cache_clear()
+    try:
+        with pytest.raises(ValueError, match="not allowed in production"):
+            get_settings()
+    finally:
+        get_settings.cache_clear()
