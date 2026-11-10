@@ -306,3 +306,48 @@ def test_create_pr_unauthorized_permission_rejection(github_service):
             mock_post.assert_not_called()
 
     asyncio.run(_test())
+
+
+def test_oauth_state_consumption_production_fails_closed_when_redis_unavailable(github_service):
+    """In production, Redis unavailability must FAIL CLOSED for OAuth state consumption.
+
+    No insecure per-process in-memory replay-prevention fallback is allowed
+    across workers in production.
+    """
+    import redis as redis_module
+    from app.core.config import get_settings
+    settings = get_settings()
+
+    state = github_service.generate_oauth_state()
+
+    with patch.object(settings, "APP_ENV", "production"), \
+         patch.object(redis_module, "from_url", side_effect=ConnectionError("redis unavailable")):
+        # First consumption must return False (fail closed), not True.
+        result = github_service.consume_oauth_state(state)
+        assert result is False, "Production must fail closed when Redis is unavailable"
+
+        # Replay must also be rejected.
+        assert github_service.consume_oauth_state(state) is False
+
+
+def test_oauth_state_consumption_development_falls_back_to_memory_when_redis_unavailable(
+    github_service,
+):
+    """In development, Redis unavailability falls back to in-memory consumption.
+
+    This per-process fallback is NOT shared across workers and is acceptable
+    only for local single-worker development. Replay is still blocked within
+    the same process.
+    """
+    import redis as redis_module
+    from app.core.config import get_settings
+    settings = get_settings()
+
+    state = github_service.generate_oauth_state()
+
+    with patch.object(settings, "APP_ENV", "development"), \
+         patch.object(redis_module, "from_url", side_effect=ConnectionError("redis unavailable")):
+        # First consumption succeeds via the in-memory fallback.
+        assert github_service.consume_oauth_state(state) is True
+        # Replay is blocked even within the in-memory fallback.
+        assert github_service.consume_oauth_state(state) is False

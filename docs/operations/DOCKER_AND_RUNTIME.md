@@ -137,3 +137,49 @@ flowchart TD
    - Implements standard OCI runtime interfaces while backing every container with a lightweight VM.
 3. **Google gVisor (`runsc`)**:
    - Intercepts all system calls in user space (`Sentry`), implementing Linux kernel abstractions without giving untrusted applications direct access to host kernel syscall dispatch tables.
+
+---
+
+## 6. Docker Socket Privilege Boundary Risk & Migration Path
+
+### 6.1 The Risk: Worker Controls the Host Docker Daemon
+
+In the Docker Compose topology, the SENTINEL-X worker container mounts the host Docker socket:
+
+```yaml
+volumes:
+  - /var/run/docker.sock:/var/run/docker.sock:ro
+```
+
+This gives the worker process full authority over `dockerd` on the host. Because the worker executes user-supplied repository code (SAST/DAST/scanners) and accepts untrusted assessment input, a compromise of the worker is a direct host compromise:
+
+- **Container escape**: `docker run --privileged`, volume mounts of `/` from the host, or `docker exec` into arbitrary containers.
+- **Host filesystem access**: `docker run -v /:/host ...` reads/writes any host file.
+- **Credential theft**: Docker daemon access can read secrets bound to other containers or the host environment.
+- **Denial of service**: Stop/restart arbitrary containers, prune images/networks, exhaust host resources.
+
+This is **not** mitigated by target-container hardening (`cap_drop`, `no-new-privileges`, read-only rootfs, `--internal` network), because those controls apply to the *target* containers the worker spawns, not to the worker itself, which talks directly to `dockerd` over the socket.
+
+### 6.2 Current Status: NOT MITIGATED
+
+> [!WARNING]
+> **Definitive Finding**: The docker.sock privilege boundary is **NOT** resolved in the current architecture. The worker continues to require the socket mount to build and run ephemeral target containers. Removing the mount would break runtime execution.
+
+The risk is accepted only insofar as the worker host is treated as a dedicated, hardened, single-tenant scanner host with no other production workloads.
+
+### 6.3 Migration Paths (in order of isolation strength)
+
+| Option | Mechanism | Isolation Gain | Effort | Breaks Execution? |
+|--------|-----------|----------------|--------|-------------------|
+| **A. Docker socket proxy** (defense-in-depth) | Deploy `docker-socket-proxy` (Teonite) sidecar on the worker host; mount only the proxy socket into the worker; whitelist `containers/*`, `build`, `network/*`, `images/*` read operations. | Worker can no longer `exec`, mount arbitrary host volumes, or run privileged containers. | Low/Medium | No (worker reconfigured to proxy socket) |
+| **B. Separate runtime host** | Worker and target runtime run on different hosts. Worker submits build/run jobs to a dedicated runtime service over a restricted API (e.g., a small FastAPI service wrapping the Docker SDK). | Worker process never touches `dockerd`; compromise of worker does not directly compromise the host Docker daemon. | Medium/High | Yes (requires runtime service + worker re-architecture) |
+| **C. Hardware microVM runtime** | Replace Docker execution with Kata Containers, AWS Firecracker, or gVisor (`runsc`) on a dedicated runtime host. | Guest kernel / syscall interception prevents container escape from reaching the host kernel. | High | Yes (runtime orchestrator re-architecture) |
+
+### 6.4 Recommended Production Sequence
+
+1. **Immediate**: Isolate the worker host — no other production services, strict host firewall, non-root dockerd (rootless) where possible.
+2. **Short term**: Introduce a Docker socket proxy as a whitelisting layer between the worker and `dockerd` (Option A). This preserves existing execution while removing the most dangerous socket operations.
+3. **Medium term**: Move execution to a separate runtime host or microVM-backed backend (Options B/C) before enabling multi-tenant or public-user assessment submission.
+
+Do not mark this control as resolved until the worker no longer holds an unmediated host Docker socket mount.
+

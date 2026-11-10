@@ -56,10 +56,29 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 # --------------------------------------------------------------------------- #
 
 def _client_ip(request: Request) -> str:
+    """
+    Extract the client IP using the same trusted-proxy policy as the rate limiter.
+
+    Never blindly trust X-Forwarded-For unless the direct socket peer is an
+    explicitly trusted reverse proxy. Otherwise arbitrary X-Forwarded-For values
+    would allow IP spoofing and per-IP rate-limit bypass.
+    """
+    direct_peer = request.client.host if request.client else "127.0.0.1"
+    trusted_proxies = set(settings.trusted_proxies_list)
+
+    # If the direct peer is not a trusted reverse proxy, ignore X-Forwarded-For
+    # entirely to prevent spoofing.
+    if direct_peer not in trusted_proxies:
+        return direct_peer
+
+    # Peer is a trusted reverse proxy (e.g. local Nginx). Use the first entry
+    # in X-Forwarded-For as the client candidate.
     xff = request.headers.get("X-Forwarded-For")
-    if xff:
-        return xff.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
+    if not xff:
+        return direct_peer
+
+    client_candidate = xff.split(",")[0].strip()
+    return client_candidate or direct_peer
 
 
 def _create_tokens(user: User, db: Session, request: Request) -> TokenResponse:
@@ -287,18 +306,28 @@ def me(current_user: User = Depends(get_current_user)) -> UserResponse:
 # --------------------------------------------------------------------------- #
 
 @router.get("/github/authorize", summary="Get GitHub OAuth authorization URL")
-def github_authorize(response: Response) -> dict:
+def github_authorize(
+    request: Request,
+    response: Response,
+) -> dict:
     state = github_service.generate_oauth_state()
     # Extract nonce from state format {timestamp}:{nonce}:{signature}
     parts = state.split(":")
     nonce = parts[1] if len(parts) >= 2 else state
-    # Bind state to initiating browser session via secure cookie
+    # Bind state to initiating browser session via secure cookie.
+    # Secure flag is set when the request is served over HTTPS (production behind
+    # a reverse proxy), keeping dev over plain HTTP functional.
+    is_secure = (
+        request.headers.get("x-forwarded-proto") == "https"
+        or settings.APP_ENV == "production"
+    )
     response.set_cookie(
         key="sentinelx_oauth_nonce",
         value=nonce,
         max_age=600,
         httponly=True,
         samesite="lax",
+        secure=is_secure,
     )
     url = github_service.get_oauth_url(state=state)
     return {"authorization_url": url, "state": state}

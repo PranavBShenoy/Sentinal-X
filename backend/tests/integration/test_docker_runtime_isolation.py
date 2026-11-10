@@ -252,3 +252,96 @@ def test_live_docker_isolation_or_blocked():
     # If Docker daemon is available, run live isolation verification
     res = orchestrator.provision("test-isolation-audit", "/tmp")
     assert res is not None
+
+
+# ---------------------------------------------------------------------------
+# Cleanup-on-every-failure-path tests (P0: reliable teardown)
+# ---------------------------------------------------------------------------
+
+def _flatten_cmds(mock_run) -> list[str]:
+    return [" ".join(call.args[0]) for call in mock_run.call_args_list]
+
+
+def test_provision_cleanup_on_build_failure():
+    """A failed image build must still trigger cleanup of partial images/networks."""
+    orchestrator = RuntimeOrchestrator()
+    assessment_id = "test-cleanup-build-fail"
+
+    with patch.object(orchestrator, "is_docker_available", return_value=True), \
+         patch.object(orchestrator.detector, "detect") as mock_detect, \
+         patch("app.runtime.docker.orchestrator.run_command") as mock_run:
+
+        mock_detect.return_value = ProjectProfile(project_type="fastapi", port=8000, entry_point="main.py")
+        # Every docker command reports failure (build fails; cleanup attempted anyway)
+        mock_run.return_value = MagicMock(succeeded=False, stdout="", stderr="build error")
+
+        res = orchestrator.provision(assessment_id, "/tmp")
+        assert res["status"] == RuntimeStatus.FAILED.value
+        assert res["error"] == "Build failed"
+
+        flattened = _flatten_cmds(mock_run)
+        # Cleanup must attempt to remove the partial image.
+        assert any("docker rmi sentinelx-app-" in cmd for cmd in flattened), (
+            "No image cleanup attempted after build failure: " + str(flattened)
+        )
+
+
+def test_provision_cleanup_on_health_check_failure():
+    """A failed health check must remove the running container, its network, and its image."""
+    orchestrator = RuntimeOrchestrator()
+    assessment_id = "test-cleanup-health-fail"
+
+    def run_cmd_side_effect(args, **kwargs):
+        if args[0:3] == ["docker", "run"]:
+            return MagicMock(succeeded=True, stdout="container-id", stderr="")
+        if args[0:2] == ["docker", "build"]:
+            return MagicMock(succeeded=True, stdout="", stderr="")
+        return MagicMock(succeeded=True, stdout="", stderr="")
+
+    with patch.object(orchestrator, "is_docker_available", return_value=True), \
+         patch.object(orchestrator.detector, "detect") as mock_detect, \
+         patch("app.runtime.docker.orchestrator.run_command", side_effect=run_cmd_side_effect) as mock_run, \
+         patch.object(orchestrator, "_health_check", return_value=False), \
+         patch.object(orchestrator, "_get_container_logs", return_value="logs"):
+
+        mock_detect.return_value = ProjectProfile(project_type="fastapi", port=8000, entry_point="main.py")
+
+        res = orchestrator.provision(assessment_id, "/tmp")
+        assert res["status"] == RuntimeStatus.HEALTH_CHECK_FAILED.value
+
+        flattened = _flatten_cmds(mock_run)
+        assert any("docker rm -f sentinelx-cont-" in cmd for cmd in flattened), (
+            "Container not removed after health check failure: " + str(flattened)
+        )
+        assert any("docker network rm sentinelx-net-" in cmd for cmd in flattened), (
+            "Network not removed after health check failure: " + str(flattened)
+        )
+        assert any("docker rmi sentinelx-app-" in cmd for cmd in flattened), (
+            "Image not removed after health check failure: " + str(flattened)
+        )
+
+
+def test_provision_cleanup_on_unexpected_exception():
+    """An unexpected exception during build/start/health must still trigger cleanup."""
+    orchestrator = RuntimeOrchestrator()
+    assessment_id = "test-cleanup-exception"
+
+    def flaky_run_command(args, **kwargs):
+        # The build call raises unexpectedly; cleanup calls must succeed.
+        if args[0:2] == ["docker", "build"]:
+            raise RuntimeError("docker daemon gone")
+        return MagicMock(succeeded=True, stdout="", stderr="")
+
+    with patch.object(orchestrator, "is_docker_available", return_value=True), \
+         patch.object(orchestrator.detector, "detect") as mock_detect, \
+         patch("app.runtime.docker.orchestrator.run_command", side_effect=flaky_run_command) as mock_run:
+
+        mock_detect.return_value = ProjectProfile(project_type="fastapi", port=8000, entry_point="main.py")
+
+        res = orchestrator.provision(assessment_id, "/tmp")
+        assert res["status"] == RuntimeStatus.FAILED.value
+
+        flattened = _flatten_cmds(mock_run)
+        assert any("docker rmi sentinelx-app-" in cmd for cmd in flattened), (
+            "No cleanup attempted after unexpected exception: " + str(flattened)
+        )

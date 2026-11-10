@@ -109,7 +109,19 @@ class RuntimeOrchestrator:
         network_name = f"sentinelx-net-{assessment_id.lower()[:12]}"
 
         # 5. Build Docker Image
-        build_ok, build_log = self._build_image(workspace_path, profile, image_tag)
+        try:
+            build_ok, build_log = self._build_image(workspace_path, profile, image_tag)
+        except Exception as exc:
+            logger.exception("Docker build raised an exception", assessment_id=assessment_id, error=str(exc))
+            self._cleanup_resources(container_name, network_name, image_tag)
+            self._update_runtime_status(
+                assessment_id=assessment_id,
+                status=RuntimeStatus.FAILED,
+                failure_stage="IMAGE_BUILD",
+                failure_reason=f"Docker build raised an exception: {exc}",
+            )
+            return {"status": RuntimeStatus.FAILED.value, "target_url": None, "error": "Build failed"}
+
         if not build_ok:
             self._update_runtime_status(
                 assessment_id=assessment_id,
@@ -118,17 +130,30 @@ class RuntimeOrchestrator:
                 failure_reason=f"Docker build failed: {build_log[:300]}",
                 safe_log_summary=build_log,
             )
+            # A failed build may leave a partial/intermediate image behind; clean it up.
+            self._cleanup_resources(container_name, network_name, image_tag)
             return {"status": RuntimeStatus.FAILED.value, "target_url": None, "error": "Build failed"}
 
         # 6. Start Container with Security Constraints
         self._update_runtime_status(assessment_id=assessment_id, status=RuntimeStatus.STARTING)
 
-        start_ok, host_port, start_log = self._start_container(
-            container_name=container_name,
-            network_name=network_name,
-            image_tag=image_tag,
-            profile=profile,
-        )
+        try:
+            start_ok, host_port, start_log = self._start_container(
+                container_name=container_name,
+                network_name=network_name,
+                image_tag=image_tag,
+                profile=profile,
+            )
+        except Exception as exc:
+            logger.exception("Container start raised an exception", assessment_id=assessment_id, error=str(exc))
+            self._cleanup_resources(container_name, network_name, image_tag)
+            self._update_runtime_status(
+                assessment_id=assessment_id,
+                status=RuntimeStatus.FAILED,
+                failure_stage="CONTAINER_START",
+                failure_reason=f"Container start raised an exception: {exc}",
+            )
+            return {"status": RuntimeStatus.FAILED.value, "target_url": None, "error": "Start failed"}
 
         if not start_ok or not host_port:
             self._update_runtime_status(
@@ -144,8 +169,19 @@ class RuntimeOrchestrator:
         target_url = f"http://127.0.0.1:{host_port}"
 
         # 7. Health Check
-        health_ok = self._health_check(target_url, timeout_seconds=30)
-        logs = self._get_container_logs(container_name)
+        try:
+            health_ok = self._health_check(target_url, timeout_seconds=30)
+            logs = self._get_container_logs(container_name)
+        except Exception as exc:
+            logger.exception("Health check raised an exception", target_url=target_url, error=str(exc))
+            self._cleanup_resources(container_name, network_name, image_tag)
+            self._update_runtime_status(
+                assessment_id=assessment_id,
+                status=RuntimeStatus.FAILED,
+                failure_stage="HEALTH_CHECK",
+                failure_reason=f"Health check raised an exception: {exc}",
+            )
+            return {"status": RuntimeStatus.FAILED.value, "target_url": target_url, "error": "Health check failed"}
 
         if not health_ok:
             logger.warning("Health check failed on running container", target_url=target_url)
@@ -159,6 +195,8 @@ class RuntimeOrchestrator:
                 safe_log_summary=logs,
                 container_ids=[container_name],
             )
+            # Always clean up the container, network, and image after a failed provisioning.
+            self._cleanup_resources(container_name, network_name, image_tag)
             return {
                 "status": RuntimeStatus.HEALTH_CHECK_FAILED.value,
                 "target_url": target_url,
@@ -228,7 +266,6 @@ class RuntimeOrchestrator:
             "build",
             "-t",
             image_tag,
-            "--network=host",
             str(workspace_path),
         ]
 

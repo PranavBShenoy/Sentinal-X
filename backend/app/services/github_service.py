@@ -100,17 +100,25 @@ class GitHubService:
             return False
         nonce = parts[1]
 
-        # 1. Distributed replay prevention via Redis if available
+        # 1. Distributed replay prevention via Redis (shared across all workers).
+        #    Required in production; development may degrade to a per-process
+        #    in-memory fallback only when Redis is unavailable.
         try:
             import redis
             r = redis.from_url(settings.REDIS_URL, decode_responses=True)
-            # Set key with NX (only if Not eXists) and 600s TTL
+            # Set key with NX (only if Not eXists) and 600s TTL.
             res = r.set(f"sentinelx:oauth_consumed:{nonce}", "1", ex=600, nx=True)
             if not res:
                 return False  # Already consumed in Redis!
             return True
-        except Exception:
-            # 2. Resilient fallback to thread-safe in-memory cache
+        except Exception as exc:
+            logger.warning("Redis unavailable for OAuth state consumption: %s", str(exc))
+            if settings.APP_ENV == "production":
+                # Fail closed in production: never allow an insecure,
+                # per-process in-memory replay-prevention fallback across workers.
+                return False
+            # 2. Development-only: thread-safe in-memory cache (NOT shared
+            #    across workers — acceptable only for local single-worker dev).
             return self._consume_local_nonce(nonce)
 
     def _consume_local_nonce(self, nonce: str) -> bool:

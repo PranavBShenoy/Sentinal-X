@@ -48,7 +48,9 @@ services:
     container_name: sentinelx-api
     restart: unless-stopped
     ports:
-      - "8000:8000"
+      # Loopback-only: the API is consumed by a same-host reverse proxy or the
+      # frontend on the same host. Do not expose 0.0.0.0:8000 directly.
+      - "127.0.0.1:8000:8000"
     environment:
       - ENVIRONMENT=${ENVIRONMENT:-development}
       - DATABASE_URL=postgresql://${POSTGRES_USER:-sentinelx}:${POSTGRES_PASSWORD:-sentinelx_dev_pass_change_in_prod}@postgres:5432/${POSTGRES_DB:-sentinelx}
@@ -100,6 +102,16 @@ services:
       redis:
         condition: service_healthy
     volumes:
+      # [!WARNING] PRIVILEGE BOUNDARY RISK
+      # The worker mounts the host Docker socket so it can build and run
+      # ephemeral target containers. A compromised worker gains full control
+      # over the host Docker daemon (container escape / host compromise).
+      #
+      # Do NOT remove this mount without first deploying an isolated runtime
+      # host or a Docker socket proxy (e.g. docker-socket-proxy) that
+      # whitelists only the container/network operations the worker needs.
+      # See docs/operations/DOCKER_AND_RUNTIME.md — "Docker Socket Privilege
+      # Boundary Risk & Migration Path".
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./rules:/app/rules:ro
       - workspace_data:/var/lib/sentinelx/workspaces
@@ -114,7 +126,9 @@ services:
     container_name: sentinelx-frontend
     restart: unless-stopped
     ports:
-      - "3000:80"
+      # Loopback-only: the frontend is consumed by a same-host reverse proxy or
+      # accessed directly on the host loopback. Do not expose 0.0.0.0:3000 directly.
+      - "127.0.0.1:3000:80"
     depends_on:
       - api
     networks:
