@@ -16,13 +16,20 @@ from typing import Any, Dict, Optional, Tuple
 import httpx
 
 from app.core.config import get_settings
+from app.runtime.client import RuntimeClient
 
 settings = get_settings()
 
 
-class BrokerClient:
+class BrokerClient(RuntimeClient):
     """
     Client for the SENTINEL-X Runtime Broker.
+
+    The broker is a separate, policy-enforcing service that holds the Docker
+    socket. This client talks to it over authenticated HTTP and never touches
+    the Docker socket directly. It implements the :class:`RuntimeClient`
+    interface so the control plane can swap backends without changing the
+    orchestrator.
 
     Authenticates with X-Broker-Key. Fail-closed on broker unavailability.
     """

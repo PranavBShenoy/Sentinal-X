@@ -154,6 +154,12 @@ class Settings(BaseSettings):
     # Maximum number of concurrent image builds the broker will run.
     # Builds are memory/CPU-bound; unbounded concurrency is a DoS vector.
     BROKER_MAX_CONCURRENT_BUILDS: int = 2
+    # Runtime execution backend mode.
+    # - "broker" (production default): talk to the policy-enforcing Runtime
+    #   Broker over authenticated HTTP. Requires BROKER_API_KEY.
+    # - "simulated": development/test-only canned responses. NEVER performs
+    #   real Docker execution. Rejected in production.
+    RUNTIME_MODE: str = "broker"
 
     # ------------------------------------------------------------------ #
     # Rate limiting
@@ -194,6 +200,22 @@ class Settings(BaseSettings):
                 raise ValueError(
                     "BROKER_API_KEY must be at least 32 characters in production."
                 )
+        return v
+
+    @field_validator("RUNTIME_MODE")
+    @classmethod
+    def check_runtime_mode(cls, v: str, info) -> str:
+        """Reject simulated runtime mode in production.
+
+        Simulated mode is development/test-only and never performs real
+        Docker execution. Production must use the broker-backed client.
+        """
+        app_env = info.data.get("APP_ENV", "development")
+        if app_env == "production" and v == "simulated":
+            raise ValueError(
+                "RUNTIME_MODE=simulated is not allowed in production. "
+                "Set RUNTIME_MODE=broker and configure BROKER_API_KEY."
+            )
         return v
 
 

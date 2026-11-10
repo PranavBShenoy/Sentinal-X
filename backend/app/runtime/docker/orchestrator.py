@@ -34,7 +34,9 @@ from app.core.database import db_session
 from app.core.logging import get_logger
 from app.models import RuntimeEnvironment, RuntimeStatus
 from app.runtime.broker.client import BrokerClient
+from app.runtime.client import RuntimeClient
 from app.runtime.detection.detector import ProjectDetector, ProjectProfile
+from app.runtime.mock_client import MockRuntimeClient
 
 logger = get_logger(__name__)
 settings = get_settings()
@@ -43,14 +45,26 @@ settings = get_settings()
 class RuntimeOrchestrator:
     """Manages the lifecycle of isolated Docker runtimes for security assessments.
 
-    All Docker operations are delegated to the Runtime Broker. The orchestrator
+    All Docker operations are delegated to a :class:`RuntimeClient`
+    implementation (the existing :class:`BrokerClient` by default, or a
+    :class:`MockRuntimeClient` in simulated development mode). The orchestrator
     retains ownership of the provisioning workflow, state tracking, and health
     checking, but never invokes the Docker CLI or socket directly.
+
+    SECURITY NOTE: Simulated mode (RUNTIME_MODE=simulated) is
+    development/test-only. It never performs real Docker execution and must
+    not be used in production. The config validator rejects
+    RUNTIME_MODE=simulated when APP_ENV=production.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, runtime_client: Optional[RuntimeClient] = None) -> None:
         self.detector = ProjectDetector()
-        self.broker = BrokerClient()
+        if runtime_client is not None:
+            self.broker: RuntimeClient = runtime_client
+        elif settings.RUNTIME_MODE == "simulated":
+            self.broker: RuntimeClient = MockRuntimeClient()
+        else:
+            self.broker: RuntimeClient = BrokerClient()
 
     def is_docker_available(self) -> bool:
         """Return True if the Runtime Broker is reachable and Docker is available."""
