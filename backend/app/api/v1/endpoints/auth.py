@@ -19,7 +19,6 @@ Security:
 from __future__ import annotations
 
 import logging
-import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -290,7 +289,7 @@ def me(current_user: User = Depends(get_current_user)) -> UserResponse:
 
 @router.get("/github/authorize", summary="Get GitHub OAuth authorization URL")
 def github_authorize() -> dict:
-    state = secrets.token_urlsafe(32)
+    state = github_service.generate_oauth_state()
     url = github_service.get_oauth_url(state=state)
     return {"authorization_url": url, "state": state}
 
@@ -304,6 +303,12 @@ async def github_callback(
 ) -> TokenResponse:
     if not code:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing OAuth code.")
+
+    if state and not github_service.verify_oauth_state(state):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired OAuth state parameter.",
+        )
 
     try:
         result = await github_service.exchange_code(code)

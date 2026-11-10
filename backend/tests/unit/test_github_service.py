@@ -11,8 +11,11 @@ Verifies:
 - GitHub App token generation credential guard
 """
 import asyncio
-import pytest
+import hashlib
+import hmac
+import time
 from unittest.mock import AsyncMock, MagicMock, patch
+import pytest
 import httpx
 
 from app.services.github_service import GitHubRateLimitError, GitHubService
@@ -177,3 +180,62 @@ def test_get_installation_token_unconfigured(github_service):
 
         with pytest.raises(RuntimeError, match="credentials not configured"):
             github_service._get_installation_token("install-123")
+
+
+def test_oauth_state_cryptographic_verification(github_service):
+    # 1. Valid state generated and verified
+    state = github_service.generate_oauth_state()
+    assert github_service.verify_oauth_state(state) is True
+
+    # 2. Tampered nonce or timestamp fails
+    parts = state.split(":")
+    tampered = f"{parts[0]}:tampered_nonce:{parts[2]}"
+    assert github_service.verify_oauth_state(tampered) is False
+
+    # 3. Malformed state string fails closed
+    assert github_service.verify_oauth_state("") is False
+    assert github_service.verify_oauth_state("invalid-state") is False
+
+    # 4. Expired state fails
+    old_ts = int(time.time()) - 1000
+    expired_raw = f"{old_ts}:{parts[1]}"
+    from app.core.config import get_settings
+    settings = get_settings()
+    expired_sig = hmac.new(settings.JWT_SECRET.encode(), expired_raw.encode(), hashlib.sha256).hexdigest()
+    expired_state = f"{expired_raw}:{expired_sig}"
+    assert github_service.verify_oauth_state(expired_state, max_age_seconds=600) is False
+
+
+def test_webhook_signature_verification(github_service):
+    payload = b'{"action": "opened", "issue": {"number": 1}}'
+    secret = "test-webhook-secret-xyz"
+
+    digest = hmac.new(secret.encode(), payload, hashlib.sha256).hexdigest()
+    valid_header = f"sha256={digest}"
+
+    # Valid signature
+    assert github_service.verify_webhook_signature(payload, valid_header, secret=secret) is True
+
+    # Invalid / forged signature fails
+    assert github_service.verify_webhook_signature(payload, "sha256=wrongdigest123456", secret=secret) is False
+
+    # Missing signature or secret fails closed
+    assert github_service.verify_webhook_signature(payload, None, secret=secret) is False
+    assert github_service.verify_webhook_signature(payload, valid_header, secret="") is False
+
+
+def test_check_repo_permission(github_service):
+    async def _test():
+        repo_data = {
+            "name": "Hello-World",
+            "permissions": {"admin": True, "push": True, "pull": True},
+        }
+
+        with patch.object(github_service, "get_repo", return_value=repo_data):
+            can_push = await github_service.check_repo_permission("octocat/Hello-World", "token", "push")
+            assert can_push is True
+
+            can_maintain = await github_service.check_repo_permission("octocat/Hello-World", "token", "maintain")
+            assert can_maintain is False
+
+    asyncio.run(_test())

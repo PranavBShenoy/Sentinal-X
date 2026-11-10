@@ -6,7 +6,10 @@ Respects GitHub API rate limits via X-RateLimit-* headers.
 """
 from __future__ import annotations
 
+import hashlib
+import hmac
 import logging
+import secrets
 import time
 from typing import Any, Dict, List, Optional
 
@@ -34,6 +37,89 @@ class GitHubService:
     # --------------------------------------------------------------------- #
     # OAuth helpers
     # --------------------------------------------------------------------- #
+
+    def generate_oauth_state(self) -> str:
+        """
+        Generate a cryptographically signed OAuth state parameter.
+        Format: {timestamp}:{nonce}:{hmac_signature}
+        """
+        now = int(time.time())
+        nonce = secrets.token_hex(16)
+        raw = f"{now}:{nonce}"
+        sig = hmac.new(
+            settings.JWT_SECRET.encode("utf-8"),
+            raw.encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+        return f"{raw}:{sig}"
+
+    def verify_oauth_state(self, state: str, max_age_seconds: int = 600) -> bool:
+        """
+        Verify the signature and timestamp of an OAuth state parameter.
+        Fails closed on missing, malformed, expired, or forged states.
+        """
+        if not state or ":" not in state:
+            return False
+        parts = state.split(":")
+        if len(parts) != 3:
+            return False
+        ts_str, nonce, received_sig = parts
+        try:
+            ts = int(ts_str)
+        except ValueError:
+            return False
+
+        # Expiry check (default 10 minutes)
+        if time.time() - ts > max_age_seconds or ts > time.time() + 60:
+            return False
+
+        raw = f"{ts}:{nonce}"
+        expected_sig = hmac.new(
+            settings.JWT_SECRET.encode("utf-8"),
+            raw.encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+
+        return hmac.compare_digest(received_sig, expected_sig)
+
+    def verify_webhook_signature(
+        self,
+        payload: bytes,
+        signature_header: Optional[str],
+        secret: Optional[str] = None,
+    ) -> bool:
+        """
+        Verify GitHub webhook payload signature against X-Hub-Signature-256.
+        Uses constant-time comparison to prevent timing attacks.
+        """
+        webhook_secret = secret or getattr(settings, "GITHUB_WEBHOOK_SECRET", None)
+        if not webhook_secret or not signature_header:
+            return False
+
+        # GitHub format: sha256=<hex_digest>
+        if not signature_header.startswith("sha256="):
+            return False
+        received_digest = signature_header[7:]
+
+        expected_digest = hmac.new(
+            webhook_secret.encode("utf-8"),
+            payload,
+            hashlib.sha256,
+        ).hexdigest()
+
+        return hmac.compare_digest(received_digest, expected_digest)
+
+    async def check_repo_permission(
+        self, full_name: str, access_token: str, required_permission: str = "push"
+    ) -> bool:
+        """Verify whether the user has the required permission on the repository."""
+        try:
+            repo_data = await self.get_repo(full_name, access_token)
+            permissions = repo_data.get("permissions", {})
+            return bool(permissions.get(required_permission, False))
+        except Exception as e:
+            logger.warning("Failed to check repo permission for %s: %s", full_name, e)
+            return False
 
     def get_oauth_url(self, state: str) -> str:
         """Return the GitHub OAuth authorization URL."""

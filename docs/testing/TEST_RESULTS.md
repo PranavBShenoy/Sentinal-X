@@ -7,7 +7,7 @@ This document records the exact test execution evidence, verification logs, and 
 ## 1. Full Pytest Suite Execution Summary
 
 - **Test Suite Command**: `PYTHONPATH=backend python3 -m pytest backend/tests/ -v`
-- **Result**: **103 PASSED**, **1 SKIPPED**, **0 FAILED** (104 total collected items) in 71.49 seconds.
+- **Result**: **109 PASSED**, **1 SKIPPED**, **0 FAILED** (110 total collected items) in 68.63 seconds.
 
 ### Test Breakdown by Subsystem
 
@@ -25,11 +25,11 @@ This document records the exact test execution evidence, verification logs, and 
 | **Rate Limiter** | `tests/integration/test_redis_rate_limiter.py` | 4 | **PASSED** | Multi-worker sliding window limiter, reset, IP spoofing defense, 429 headers. |
 | **Tenant Isolation** | `tests/integration/test_tenant_isolation_deep.py` | 7 | **PASSED** | Projects, repositories, assessments, findings, SBOM graph, reports, remediation proposals. |
 | **Detector** | `tests/unit/test_detector.py` | 4 | **PASSED** | FastAPI, Flask, Node.js project detection, env var detection. |
-| **GitHub Integration** | `tests/unit/test_github_service.py` | 8 | **PASSED** | OAuth authorization URL, code exchange, multi-page repo traversal, latest commit SHA, PR creation, X-RateLimit headers. |
+| **GitHub Integration** | `tests/unit/test_github_service.py` | 11 | **PASSED** | OAuth authorization URL, code exchange, multi-page repo traversal, latest commit SHA, PR creation, X-RateLimit headers, unconfigured app token guard, signed HMAC OAuth state generation and verification, X-Hub-Signature-256 HMAC webhook signature validation, repository permission checks. |
 | **Normalization** | `tests/unit/test_normalization.py` | 4 | **PASSED** | Deterministic SHA-256 fingerprinting, severity mapping, confidence mapping. |
-| **OpenRouter AI Client** | `tests/unit/test_openrouter_client.py` | 8 | **PASSED** | Prompt injection protection, secret redaction, deterministic fallback for SECRET/DEPENDENCY/SAST/DAST, Pydantic schema validation, timeout/HTTP resilience. |
+| **OpenRouter AI Client** | `tests/unit/test_openrouter_client.py` | 11 | **PASSED** | Prompt injection protection in evidence, secret redaction, deterministic fallback for SECRET/DEPENDENCY/SAST/DAST, Pydantic schema validation, timeout/HTTP resilience, malformed/empty response handling, batch bounds and priority filtering. |
 | **Risk Engine** | `tests/unit/test_risk_engine.py` | 5 | **PASSED** | Critical findings, low severity, direct vs. transitive weights, secret multiplier, confidence weighting. |
-| **Security Core** | `tests/unit/test_security.py` | 7 | **PASSED** | Bcrypt hashing, JWT creation/decoding, expiration, invalid token, refresh tokens, secret redactor. |
+| **Security Core** | `tests/unit/test_security.py` | 7 | **PASSED** | Bcrypt hashing (12 rounds), JWT creation/decoding, expiration, invalid token, refresh tokens, secret redactor. |
 | **SSRF Defenses** | `tests/unit/test_ssrf_protection.py` | 11 | **PASSED** | Loopback, RFC1918, IPv6 loopback, IPv4-mapped IPv6, metadata IPs, DNS fail-closed, encoded IPs, public IPs allowed, redirect blocking. |
 
 ---
@@ -38,14 +38,14 @@ This document records the exact test execution evidence, verification logs, and 
 
 ### Ruff Linter & Formatter Check
 - **Command**: `.semgrep-env/bin/ruff check backend/`
-- **Result**: `All checks passed!` (0 lint errors across 9,000+ lines of Python).
+- **Result**: `All checks passed!` (0 lint errors across entire codebase).
 
 ### Bandit Security Scan
 - **Command**: `.semgrep-env/bin/bandit -r backend/app/ -ll -ii`
 - **Result**: `No issues identified.`
-  - Total lines of code: 9,021
+  - Total lines of code: 9,099
   - Total issues (Medium/High severity): **0**
 
 ### Frontend Production Build
 - **Command**: `cd frontend && npm run build`
-- **Result**: `✓ built in 2.57s` (1,508 modules transformed, 0 TypeScript errors, clean Vite production assets).
+- **Result**: `✓ built in 2.64s` (1,508 modules transformed, 0 TypeScript errors, clean Vite production assets).
