@@ -220,7 +220,7 @@ export const DashboardPage: React.FC = () => {
                       <StatusBadge status={a.status} />
                     </td>
                     <td className="px-5 py-4">
-                      <RiskScoreMeter score={a.overall_risk_score} size="sm" />
+                      <RiskScoreMeter score={a.risk_score} size="sm" />
                     </td>
                     <td className="px-5 py-4">
                       <span className="font-mono text-sm font-semibold text-slate-200">

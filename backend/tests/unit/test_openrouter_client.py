@@ -309,3 +309,75 @@ def test_analyze_assessment_batch_bounds():
             assert summary["findings_analyzed"] == 2
             mock_order.limit.assert_called_once_with(2)
             assert mock_analyze.call_count == 2
+
+
+def _llm_content(payload: dict):
+    """Build a mocked OpenRouter 200 response containing ``payload`` as JSON."""
+    mock_response = MagicMock(spec=httpx.Response)
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "choices": [{"message": {"content": json.dumps(payload)}}]
+    }
+    return mock_response
+
+
+def test_call_openrouter_rejects_unknown_fields():
+    """Model output with extra fields must be rejected, not silently stored."""
+    client = OpenRouterClient()
+    client.api_key = "sk-mock-key"
+
+    response = _llm_content({
+        "summary": "s",
+        "impact": "i",
+        "confidence": "HIGH",
+        "remediation_steps": ["step"],
+        "patch_proposal": None,
+        "limitations": [],
+        "injected_execution": "rm -rf /",  # unknown field
+    })
+
+    with patch("httpx.Client.post", return_value=response):
+        result = client._call_openrouter([{"role": "user", "content": "test"}])
+
+    assert result is None
+
+
+def test_call_openrouter_rejects_invalid_confidence():
+    """Confidence must be constrained to the documented HIGH/MEDIUM/LOW set."""
+    client = OpenRouterClient()
+    client.api_key = "sk-mock-key"
+
+    response = _llm_content({
+        "summary": "s",
+        "impact": "i",
+        "confidence": "CERTAIN",
+        "remediation_steps": ["step"],
+        "patch_proposal": None,
+        "limitations": [],
+    })
+
+    with patch("httpx.Client.post", return_value=response):
+        result = client._call_openrouter([{"role": "user", "content": "test"}])
+
+    assert result is None
+
+
+def test_call_openrouter_normalizes_confidence_case():
+    """Case-insensitive confidence is normalized to the canonical enum value."""
+    client = OpenRouterClient()
+    client.api_key = "sk-mock-key"
+
+    response = _llm_content({
+        "summary": "s",
+        "impact": "i",
+        "confidence": " medium ",
+        "remediation_steps": ["step"],
+        "patch_proposal": None,
+        "limitations": [],
+    })
+
+    with patch("httpx.Client.post", return_value=response):
+        result = client._call_openrouter([{"role": "user", "content": "test"}])
+
+    assert result is not None
+    assert result.confidence == "MEDIUM"

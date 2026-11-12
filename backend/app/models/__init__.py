@@ -23,6 +23,8 @@ from app.models.models import (
     ScanJobStatus,
     User,
     UserSession,
+    Worker,
+    AuthorizationRequest,
 )
 
 __all__ = [
@@ -50,4 +52,5 @@ __all__ = [
     "ScanJobStatus",
     "User",
     "UserSession",
+    "Worker",
 ]

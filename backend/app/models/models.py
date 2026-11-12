@@ -23,6 +23,7 @@ from sqlalchemy import (
     Enum,
     Float,
     ForeignKey,
+    func,
     Index,
     Integer,
     JSON,
@@ -173,6 +174,8 @@ class User(Base):
     projects = relationship("Project", back_populates="owner", cascade="all, delete-orphan")
     sessions = relationship("UserSession", back_populates="user", cascade="all, delete-orphan")
     audit_logs = relationship("AuditLog", back_populates="user")
+    workers = relationship("Worker", back_populates="user", cascade="all, delete-orphan")
+    authorization_requests = relationship("AuthorizationRequest", back_populates="user", cascade="all, delete-orphan")
 
 
 class UserSession(Base):
@@ -309,12 +312,18 @@ class Assessment(Base):
     runtime_environment = relationship("RuntimeEnvironment", back_populates="assessment", uselist=False)
     remediation_proposals = relationship("RemediationProposal", back_populates="assessment")
     reports = relationship("Report", back_populates="assessment", cascade="all, delete-orphan")
+    authorization_requests = relationship("AuthorizationRequest", back_populates="assessment", cascade="all, delete-orphan")
 
     __table_args__ = (
         Index("ix_assessments_project_id", "project_id"),
         Index("ix_assessments_status", "status"),
         Index("ix_assessments_created_at", "created_at"),
     )
+
+    @property
+    def findings_count(self) -> int:
+        """Number of findings attached to this assessment (API convenience)."""
+        return len(self.findings)
 
 
 class ScanJob(Base):
@@ -634,3 +643,138 @@ class AuditLog(Base):
         Index("ix_audit_logs_action", "action"),
         Index("ix_audit_logs_created_at", "created_at"),
     )
+
+
+# ---------------------------------------------------------------------------
+# Workers
+# ---------------------------------------------------------------------------
+
+
+class Worker(Base):
+    """A registered execution worker bound to a user (ownership root)."""
+
+    __tablename__ = "workers"
+
+    id = Column(UUIDType, primary_key=True, default=new_uuid)
+    user_id = Column(
+        UUIDType,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    # SHA-256 certificate fingerprint (hex), unique per worker identity.
+    cert_fingerprint = Column(String(64), unique=True, nullable=False, index=True)
+    # Optional human-readable subject for audit/reference only.
+    cert_subject = Column(String(500), nullable=True)
+    is_active = Column(Boolean, default=True, nullable=False)
+    is_revoked = Column(Boolean, default=False, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+    revoked_at = Column(DateTime(timezone=True), nullable=True)
+
+    user = relationship("User", back_populates="workers")
+
+    __table_args__ = (
+        Index("ix_workers_user_id", "user_id"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Authorization Requests
+# ---------------------------------------------------------------------------
+
+class AuthorizationRequest(Base):
+    """Durable authorization record establishing trusted task provenance.
+
+    Binds an authenticated user, assessment, tenant, operation and unique
+    request identifier.  Celery tasks and the orchestrator must reload and
+    validate this record before issuing any job capability token.  Status
+    tracking (pending / approved / consumed / cancelled) provides replay
+    prevention.
+    """
+
+    __tablename__ = "authorization_requests"
+
+    id = Column(UUIDType, primary_key=True, default=new_uuid)
+    user_id = Column(
+        UUIDType,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    assessment_id = Column(
+        UUIDType,
+        ForeignKey("assessments.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    tenant_id = Column(
+        UUIDType,
+        nullable=False,
+    )
+    operation = Column(
+        String(20),
+        nullable=False,
+    )
+    request_id = Column(
+        String(64),
+        nullable=False,
+        unique=True,
+    )
+    status = Column(
+        String(20),
+        default="pending",
+    )  # pending / approved / consumed / cancelled
+    created_at = Column(DateTime(timezone=True), default=utcnow)
+    consumed_at = Column(DateTime(timezone=True), nullable=True)
+    execution_id = Column(UUIDType, nullable=True)
+
+    user = relationship("User", back_populates="authorization_requests")
+    assessment = relationship("Assessment", back_populates="authorization_requests")
+    execution = relationship("Execution", back_populates="authorization_request")
+
+    __table_args__ = (
+        Index("ix_auth_requests_user_id", "user_id"),
+        Index("ix_auth_requests_assessment_id", "assessment_id"),
+        Index("ix_auth_requests_request_id", "request_id"),
+        Index("ix_auth_requests_status", "status"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Executions
+# ---------------------------------------------------------------------------
+
+class ExecutionStatus(str, enum.Enum):
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class Execution(Base):
+    """Durable execution record tracking runtime provisioning lifecycle.
+
+    One Execution is bound to exactly one AuthorizationRequest.
+    Atomic claim via INSERT ... ON CONFLICT prevents duplicate runtime
+    submissions. Status tracks progress and enables crash recovery.
+    """
+
+    __tablename__ = "executions"
+
+    id = Column(UUIDType, primary_key=True, default=new_uuid)
+    authorization_request_id = Column(
+        String(36),
+        ForeignKey("authorization_requests.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+    )
+    status = Column(
+        Enum(ExecutionStatus, native_enum=False),
+        nullable=False,
+        default=ExecutionStatus.PENDING,
+    )
+    started_at = Column(DateTime(timezone=True), nullable=True)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+    result = Column(JSON, nullable=True)
+    crashed_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    authorization_request = relationship("AuthorizationRequest", back_populates="execution")

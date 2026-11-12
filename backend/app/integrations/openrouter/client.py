@@ -15,7 +15,7 @@ import json
 from typing import Any, Dict, List, Optional
 
 import httpx
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
@@ -29,7 +29,13 @@ settings = get_settings()
 
 
 class AIExplanationResponse(BaseModel):
-    """Structured response schema expected from the LLM."""
+    """Structured response schema expected from the LLM.
+
+    ``extra="forbid"`` rejects any unknown field: model output is untrusted
+    and must not be able to smuggle additional attributes into the schema.
+    """
+
+    model_config = ConfigDict(extra="forbid")
 
     summary: str = Field(description="Evidence-grounded explanation of the vulnerability")
     impact: str = Field(description="Realistic potential impact based on evidence")
@@ -37,6 +43,14 @@ class AIExplanationResponse(BaseModel):
     remediation_steps: List[str] = Field(description="Step-by-step guidance to fix the issue")
     patch_proposal: Optional[str] = Field(None, description="Suggested code or configuration diff")
     limitations: List[str] = Field(default_factory=list, description="Caveats and unverified hypotheses")
+
+    @field_validator("confidence")
+    @classmethod
+    def validate_confidence(cls, v: str) -> str:
+        normalized = v.strip().upper() if isinstance(v, str) else v
+        if normalized not in ("HIGH", "MEDIUM", "LOW"):
+            raise ValueError("confidence must be one of HIGH, MEDIUM, LOW")
+        return normalized
 
 
 class OpenRouterClient:

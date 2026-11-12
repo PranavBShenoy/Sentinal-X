@@ -66,6 +66,8 @@ def sign_job_token(
     resource_limits: Dict[str, Any],
     token_type: str = TOKEN_TYPE_MUTATION,
     ttl_seconds: int = MUTATION_TOKEN_TTL_SECONDS,
+    audience: Optional[str] = None,
+    issuer: str = "sentinelx-authorization",
 ) -> str:
     """Sign a job capability token with the private key.
 
@@ -86,6 +88,10 @@ def sign_job_token(
         resource_limits: Resource limits enforced for this job.
         token_type: ``mutation`` (one-time) or ``read`` (re-usable).
         ttl_seconds: Token lifetime in seconds.
+        audience: Intended audience (runtime host identifier). If set,
+            included as the ``aud`` claim and verified by the Runtime Host.
+        issuer: Token issuer. Defaults to ``sentinelx-authorization``.
+            Verified by the Runtime Host via ``expected_issuer``.
 
     Returns:
         A compact JWS string (header.payload.signature).
@@ -102,9 +108,11 @@ def sign_job_token(
         "exp": now + ttl_seconds,
         "nbf": now,
         "iat": now,
-        "iss": "sentinelx-authorization",
+        "iss": issuer,
         "token_type": token_type,
     }
+    if audience:
+        payload["aud"] = audience
 
     header = {"alg": "EdDSA", "typ": "JWT"}
     header_b64 = _urlsafe_b64encode(json.dumps(header, separators=(",", ":")).encode())
@@ -122,6 +130,8 @@ def verify_job_token(
     expected_operation: Optional[str] = None,
     expected_assessment_id: Optional[str] = None,
     expected_tenant_id: Optional[str] = None,
+    expected_audience: Optional[str] = None,
+    expected_issuer: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Verify a job capability token with the public key.
 
@@ -135,6 +145,9 @@ def verify_job_token(
         expected_assessment_id: If set, reject tokens for a different
             assessment (cross-tenant protection).
         expected_tenant_id: If set, reject tokens for a different tenant.
+        expected_audience: If set, reject tokens issued for a different
+            audience (runtime host identifier).
+        expected_issuer: If set, reject tokens issued by a different issuer.
 
     Returns:
         The decoded token payload dict.
@@ -185,6 +198,18 @@ def verify_job_token(
         raise JobTokenError(
             f"Tenant mismatch: expected {expected_tenant_id}, "
             f"got {payload.get('tenant_id')}"
+        )
+
+    if expected_audience is not None and payload.get("aud") != expected_audience:
+        raise JobTokenError(
+            f"Audience mismatch: expected {expected_audience}, "
+            f"got {payload.get('aud')}"
+        )
+
+    if expected_issuer is not None and payload.get("iss") != expected_issuer:
+        raise JobTokenError(
+            f"Issuer mismatch: expected {expected_issuer}, "
+            f"got {payload.get('iss')}"
         )
 
     return payload

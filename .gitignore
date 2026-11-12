@@ -91,6 +91,13 @@ reports/generated/
 id_rsa
 id_ed25519
 
+# Runtime Host generated certificate material and proxy token
+runtime_host/certs/ca/
+runtime_host/certs/server/
+runtime_host/certs/client/
+runtime_host/certs/crl/
+runtime_host/certs/proxy_token
+
 # Alembic
 backend/migrations/versions/__pycache__/
 
@@ -102,4 +109,27 @@ bin/
 .pipx/
 .semgrep-env/
 .uv/
+
+# Explicit local/test state exclusions
+**/__pycache__/
+**/.pytest_cache/
+*.pyc
+node_modules/
+dist/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+.env.*
+!.env.example
+.codex/
+**/.codex/
+test.log
+test-*.log
+pytest-*.log
+
+# Temporary remediation reports; official project documentation stays tracked.
+Stage_*_Report*.md
+!README.md
+!ARCHITECTURE.md
+!STAGE_3B_EXECUTION_GUIDE.md
 

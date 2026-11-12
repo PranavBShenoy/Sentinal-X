@@ -161,10 +161,20 @@ def test_runtime_mode_simulated_allowed_in_development():
     assert settings.RUNTIME_MODE == "simulated"
 
 
-def test_runtime_mode_broker_allowed_in_production():
-    """Broker mode is allowed in production when a key is configured."""
+def test_runtime_mode_broker_rejected_in_production():
+    """Production must use remote mode; broker shares the host Docker socket."""
+    with pytest.raises(ValueError, match="broker is not allowed in production"):
+        Settings(
+            APP_ENV="production",
+            RUNTIME_MODE="broker",
+            BROKER_API_KEY="a" * 32,
+        )
+
+
+def test_runtime_mode_broker_allowed_in_development():
+    """Broker mode remains available outside production."""
     settings = Settings(
-        APP_ENV="production",
+        APP_ENV="development",
         RUNTIME_MODE="broker",
         BROKER_API_KEY="a" * 32,
     )
@@ -195,15 +205,15 @@ def test_runtime_mode_simulated_rejected_via_env_vars_in_production(monkeypatch)
         get_settings.cache_clear()
 
 
-def test_runtime_mode_broker_allowed_via_env_vars_in_production(monkeypatch):
-    """Env-var-driven production startup accepts RUNTIME_MODE=broker."""
+def test_runtime_mode_broker_rejected_via_env_vars_in_production(monkeypatch):
+    """Env-var-driven production startup rejects RUNTIME_MODE=broker."""
     monkeypatch.setenv("APP_ENV", "production")
     monkeypatch.setenv("RUNTIME_MODE", "broker")
     monkeypatch.setenv("BROKER_API_KEY", "a" * 32)
     get_settings.cache_clear()
     try:
-        settings = Settings()
-        assert settings.RUNTIME_MODE == "broker"
+        with pytest.raises(ValueError, match="broker is not allowed in production"):
+            Settings()
     finally:
         get_settings.cache_clear()
 

@@ -204,6 +204,11 @@ def e2e_environment() -> Generator[dict, None, None]:
 @pytest.fixture(scope="module")
 def browser() -> Generator[webdriver.Chrome, None, None]:
     """Initializes a headless Chromium webdriver."""
+    try:
+        probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        probe.close()
+    except OSError:
+        pytest.skip("Local socket creation is restricted in this test environment")
     if not is_browser_available():
         pytest.skip("Chromium or chromedriver is not available")
 

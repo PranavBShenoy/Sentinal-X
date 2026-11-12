@@ -16,6 +16,7 @@
 Create a production `.env` file at the root:
 ```bash
 ENVIRONMENT=production
+APP_ENV=production
 DATABASE_URL=postgresql://sentinelx:STRONG_RANDOM_PASSWORD@postgres:5432/sentinelx
 REDIS_URL=redis://redis:6379/0
 CELERY_BROKER_URL=redis://redis:6379/0

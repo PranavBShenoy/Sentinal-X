@@ -33,6 +33,8 @@ class MockRuntimeClient(RuntimeClient):
     mistaken for real Docker execution.
     """
 
+    supports_jobs = True
+
     def __init__(
         self,
         *,
@@ -168,6 +170,10 @@ class MockRuntimeClient(RuntimeClient):
         operation: str,
         artifact_url: Optional[str] = None,
         artifact_sha256: Optional[str] = None,
+        idempotency_key: Optional[str] = None,
+        tenant_id: Optional[str] = None,
+        resources: Optional[list[str]] = None,
+        resource_limits: Optional[Dict[str, Any]] = None,
     ) -> Tuple[bool, str, Optional[str]]:
         """Simulate submitting a job to the runtime execution plane.
 
@@ -182,6 +188,10 @@ class MockRuntimeClient(RuntimeClient):
                 "operation": operation,
                 "artifact_url": artifact_url,
                 "artifact_sha256": artifact_sha256,
+                "idempotency_key": idempotency_key,
+                "tenant_id": tenant_id,
+                "resources": resources,
+                "resource_limits": resource_limits,
             }
         )
         if operation == "build" and self.fail_build:

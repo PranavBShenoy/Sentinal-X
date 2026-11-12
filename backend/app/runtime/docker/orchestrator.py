@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import os
 import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -32,11 +33,13 @@ import httpx
 from app.core.config import get_settings
 from app.core.database import db_session
 from app.core.logging import get_logger
-from app.models import RuntimeEnvironment, RuntimeStatus
+from app.authz.component import AuthorizationComponent
+from app.models import Assessment, RuntimeEnvironment, RuntimeStatus
 from app.runtime.broker.client import BrokerClient
 from app.runtime.client import RuntimeClient
 from app.runtime.detection.detector import ProjectDetector, ProjectProfile
 from app.runtime.mock_client import MockRuntimeClient
+from app.runtime.runtime_host_client import RemoteRuntimeClient
 
 logger = get_logger(__name__)
 settings = get_settings()
@@ -57,12 +60,19 @@ class RuntimeOrchestrator:
     RUNTIME_MODE=simulated when APP_ENV=production.
     """
 
-    def __init__(self, runtime_client: Optional[RuntimeClient] = None) -> None:
+    def __init__(
+        self,
+        runtime_client: Optional[RuntimeClient] = None,
+        authz_component: Optional[AuthorizationComponent] = None,
+    ) -> None:
         self.detector = ProjectDetector()
+        self.authz_component = authz_component
         if runtime_client is not None:
             self.broker: RuntimeClient = runtime_client
         elif settings.RUNTIME_MODE == "simulated":
             self.broker: RuntimeClient = MockRuntimeClient()
+        elif settings.RUNTIME_MODE == "remote":
+            self.broker = RemoteRuntimeClient(require_mtls=True)
         else:
             self.broker: RuntimeClient = BrokerClient()
 
@@ -70,7 +80,7 @@ class RuntimeOrchestrator:
         """Return True if the Runtime Broker is reachable and Docker is available."""
         return self.broker.is_available()
 
-    def provision(self, assessment_id: str, workspace_path: str) -> Dict[str, Any]:
+    def provision(self, assessment_id: str, workspace_path: str, request_id: str = None) -> Dict[str, Any]:
         """
         Main entry point: detect project, build container, start, and run health check.
 
@@ -81,6 +91,44 @@ class RuntimeOrchestrator:
         Fails closed when the broker is unavailable.
         """
         logger.info("Starting runtime provisioning", assessment_id=assessment_id)
+
+        # AuthorizationRecord validation is mandatory for all provisioning.
+        # If request_id is missing, fail closed - no silent skips.
+        if not request_id:
+            msg = "Authorization request_id is required for runtime provisioning;"
+            logger.warning(msg, assessment_id=assessment_id)
+            raise ValueError(msg)
+
+        authorization_context = None
+        if request_id:
+            from sqlalchemy import select
+            from app.models import AuthorizationRequest
+
+            with db_session() as session:
+                auth_record = (
+                    session.query(AuthorizationRequest)
+                    .filter(AuthorizationRequest.request_id == request_id)
+                    .first()
+                )
+                if not auth_record:
+                    msg = f"Authorization record not found for request_id={request_id}"
+                    logger.warning(msg, assessment_id=assessment_id)
+                    raise ValueError(msg)
+                if auth_record.status != "consumed":
+                    msg = f"Authorization record status is '{auth_record.status}'; cannot proceed with provisioning"
+                    logger.warning(msg, assessment_id=assessment_id)
+                    raise ValueError(msg)
+                authorization_context = {
+                    "assessment_id": str(auth_record.assessment_id),
+                    "tenant_id": str(auth_record.tenant_id),
+                    "user_id": str(auth_record.user_id),
+                }
+                assessment_record = session.query(Assessment).filter(
+                    Assessment.id == assessment_id
+                ).first()
+                artifact_config = (assessment_record.config or {}) if assessment_record else {}
+                authorization_context["artifact_url"] = artifact_config.get("artifact_url")
+                authorization_context["artifact_sha256"] = artifact_config.get("artifact_sha256")
 
         # 1. Initialize or get RuntimeEnvironment in DB
         self._ensure_runtime_record(assessment_id)
@@ -133,6 +181,113 @@ class RuntimeOrchestrator:
         image_tag = f"sentinelx-app-{assessment_id.lower()[:12]}"
         container_name = f"sentinelx-cont-{assessment_id.lower()[:12]}"
         network_name = f"sentinelx-net-{assessment_id.lower()[:12]}"
+        execution_security = {
+            "cpu_limit": "1.0",
+            "mem_limit": "512m",
+            "drop_capabilities": ["ALL"],
+            "no_new_privileges": True,
+            "read_only_rootfs": True,
+        }
+
+        # Remote execution uses one capability per concrete Runtime Host job.
+        # The job ID is chosen before asking the injected signer to issue the
+        # JWT, then the same ID and token are sent in the submission body.
+        if isinstance(self.broker, RemoteRuntimeClient):
+            if self.authz_component is None:
+                raise RuntimeError("AuthorizationComponent is required for remote runtime provisioning")
+            if authorization_context is None:
+                raise ValueError("Authorization request context is required for remote provisioning")
+            if authorization_context["assessment_id"] != str(assessment_id):
+                raise ValueError("Authorization request is bound to another assessment")
+            artifact_url = authorization_context.get("artifact_url")
+            artifact_sha256 = authorization_context.get("artifact_sha256")
+            if not artifact_url or not artifact_sha256:
+                raise ValueError(
+                    "Remote provisioning requires an artifact_url and artifact_sha256 "
+                    "in the assessment configuration"
+                )
+            from app.models import Worker
+
+            with db_session() as session:
+                worker = session.query(Worker).filter(
+                    Worker.user_id == authorization_context["user_id"]
+                ).first()
+                if not worker or not worker.is_active or worker.is_revoked:
+                    raise ValueError("An active, non-revoked worker is required for remote provisioning")
+                worker_subject = worker.cert_subject or ""
+
+            build_job_id = str(uuid.uuid4())
+            build_token = self.authz_component.issue_mutation_token(
+                assessment_id=str(assessment_id),
+                tenant_id=authorization_context["tenant_id"],
+                operation="build",
+                worker_cert_subject=worker_subject,
+                resource_limits={"artifact_sha256": artifact_sha256},
+                audience=settings.RUNTIME_HOST_AUDIENCE,
+                job_id=build_job_id,
+            )
+            build_ok, submitted_build_id, _ = self.broker.submit_job(
+                assessment_id=str(assessment_id),
+                operation="build",
+                job_id=build_job_id,
+                job_token=build_token,
+                tenant_id=authorization_context["tenant_id"],
+                resources=[container_name, image_tag, network_name],
+                artifact_url=artifact_url,
+                artifact_sha256=artifact_sha256,
+                image_tag=image_tag,
+                network_name=network_name,
+                resource_limits={"artifact_sha256": artifact_sha256},
+                idempotency_key=f"{request_id}:build:{build_job_id}",
+                **execution_security,
+            )
+            if not build_ok or submitted_build_id != build_job_id:
+                return {"status": RuntimeStatus.FAILED.value, "target_url": None,
+                        "error": submitted_build_id or "Remote artifact build failed"}
+
+            job_id = str(uuid.uuid4())
+            capability_token = self.authz_component.issue_mutation_token(
+                assessment_id=str(assessment_id),
+                tenant_id=authorization_context["tenant_id"],
+                operation="run",
+                worker_cert_subject=worker_subject,
+                audience=settings.RUNTIME_HOST_AUDIENCE,
+                job_id=job_id,
+            )
+            ok, submitted_job_id, target_url = self.broker.submit_job(
+                assessment_id=str(assessment_id),
+                operation="run",
+                job_id=job_id,
+                job_token=capability_token,
+                tenant_id=authorization_context["tenant_id"],
+                resources=[container_name, image_tag, network_name],
+                image_tag=image_tag,
+                container_name=container_name,
+                network_name=network_name,
+                app_port=profile.port or 8000,
+                resource_limits={},
+                idempotency_key=f"{request_id}:run:{job_id}",
+                **execution_security,
+            )
+            if not ok or submitted_job_id != job_id or not target_url:
+                return {"status": RuntimeStatus.FAILED.value, "target_url": None,
+                        "error": submitted_job_id or "Remote run submission failed"}
+            self._update_runtime_status(
+                assessment_id=assessment_id,
+                status=RuntimeStatus.RUNNING,
+                target_url=target_url,
+                health_check_passed=True,
+                container_ids=[container_name],
+                network_id=network_name,
+                adapter_type=profile.project_type,
+            )
+            return {
+                "status": RuntimeStatus.RUNNING.value,
+                "target_url": target_url,
+                "health_check_passed": True,
+                "container_name": container_name,
+                "job_id": job_id,
+            }
 
         # 5. Build Docker Image (via broker)
         try:

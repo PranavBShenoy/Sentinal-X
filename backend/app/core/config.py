@@ -171,6 +171,17 @@ class Settings(BaseSettings):
     RUNTIME_CLIENT_KEY: Optional[str] = None
     # CA certificate for verifying the Runtime Host's server certificate.
     RUNTIME_CA_CERT: Optional[str] = None
+    # Ed25519 signer material is loaded only by the Control Plane authz provider.
+    JOB_TOKEN_PRIVATE_KEY_PATH: Optional[str] = None
+    JOB_TOKEN_PUBLIC_KEY_PATH: Optional[str] = None
+    RUNTIME_HOST_AUDIENCE: str = "runtime-host"
+
+    # ------------------------------------------------------------------ #
+    # Runtime Execution Plane (remote mode)
+    # ------------------------------------------------------------------ #
+    # Allowed control-plane origins for artifact download (comma-separated).
+    # The Runtime Host only downloads artifacts from these origins.
+    RUNTIME_ARTIFACT_ORIGINS: str = ""
 
     # ------------------------------------------------------------------ #
     # Rate limiting
@@ -216,17 +227,73 @@ class Settings(BaseSettings):
     @field_validator("RUNTIME_MODE")
     @classmethod
     def check_runtime_mode(cls, v: str, info) -> str:
-        """Reject simulated runtime mode in production.
+        """Validate runtime execution mode for production.
 
-        Simulated mode is development/test-only and never performs real
-        Docker execution. Production must use the broker-backed client.
+        Production requires RUNTIME_MODE=remote (separate Runtime Execution
+        Plane). Broker mode (shared Docker socket) is development/staging
+        only. Simulated mode is never allowed in production.
         """
         app_env = info.data.get("APP_ENV", "development")
-        if app_env == "production" and v == "simulated":
+        if app_env == "production":
+            if v == "simulated":
+                raise ValueError(
+                    "RUNTIME_MODE=simulated is not allowed in production. "
+                    "Set RUNTIME_MODE=remote and configure mTLS certificates."
+                )
+            if v == "broker":
+                raise ValueError(
+                    "RUNTIME_MODE=broker is not allowed in production. "
+                    "The broker shares the host Docker socket with the control "
+                    "plane. Set RUNTIME_MODE=remote for a separate Runtime "
+                    "Execution Plane."
+                )
+            if v != "remote":
+                raise ValueError(
+                    f"RUNTIME_MODE={v} is not valid in production. "
+                    "Set RUNTIME_MODE=remote for a separate Runtime "
+                    "Execution Plane."
+                )
+        return v
+
+    @field_validator("RUNTIME_CLIENT_CERT", "RUNTIME_CLIENT_KEY", "RUNTIME_CA_CERT")
+    @classmethod
+    def check_runtime_cert_paths(cls, v: str, info) -> str:
+        """Validate mTLS certificate paths for remote runtime mode.
+
+        When RUNTIME_MODE=remote, all three cert paths must be set and
+        point to readable files. Production fails closed if any are missing.
+        """
+        if not v:
+            return v
+        import os
+
+        if not os.path.isfile(v) or not os.access(v, os.R_OK):
             raise ValueError(
-                "RUNTIME_MODE=simulated is not allowed in production. "
-                "Set RUNTIME_MODE=broker and configure BROKER_API_KEY."
+                f"Certificate file not found or unreadable: {v}"
             )
+        return v
+
+    @field_validator("RUNTIME_MODE")
+    @classmethod
+    def check_remote_requires_certs(cls, v: str, info) -> str:
+        """Require mTLS certificates when RUNTIME_MODE=remote in production."""
+        app_env = info.data.get("APP_ENV", "development")
+        if app_env == "production" and v == "remote":
+            cert_fields = [
+                info.data.get("RUNTIME_CLIENT_CERT"),
+                info.data.get("RUNTIME_CLIENT_KEY"),
+                info.data.get("RUNTIME_CA_CERT"),
+            ]
+            for field_val, field_name in zip(
+                cert_fields,
+                ["RUNTIME_CLIENT_CERT", "RUNTIME_CLIENT_KEY", "RUNTIME_CA_CERT"],
+                strict=False,
+            ):
+                if not field_val:
+                    raise ValueError(
+                        f"{field_name} is required when RUNTIME_MODE=remote "
+                        "in production"
+                    )
         return v
 
 

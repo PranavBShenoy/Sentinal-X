@@ -131,7 +131,9 @@ export const RemediationPage: React.FC = () => {
         </div>
       ) : (
         <div className="space-y-6">
-          {proposals.map((prop) => (
+          {proposals.map((prop) => {
+            const isApproved = ['APPROVED', 'APPLIED', 'VERIFIED'].includes(prop.status);
+            return (
             <div
               key={prop.id}
               className="bg-surface border border-border rounded-xl p-6 space-y-4 hover:border-slate-600 transition-colors"
@@ -142,7 +144,7 @@ export const RemediationPage: React.FC = () => {
                     <span className="font-mono text-xs text-slate-400 bg-surface-elevated px-2 py-0.5 rounded border border-border">
                       Proposal: {prop.id.substring(0, 8)}
                     </span>
-                    {prop.is_approved ? (
+                    {isApproved ? (
                       <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-950/70 text-emerald-400 border border-emerald-800">
                         <CheckCircle2 className="w-3.5 h-3.5" /> Approved
                       </span>
@@ -155,7 +157,7 @@ export const RemediationPage: React.FC = () => {
                   <h3 className="font-semibold text-slate-100">{prop.summary}</h3>
                 </div>
 
-                {!prop.is_approved ? (
+                {!isApproved ? (
                   <button
                     onClick={() => handleApprove(prop.id)}
                     disabled={actionLoading === prop.id}
@@ -176,17 +178,17 @@ export const RemediationPage: React.FC = () => {
                 <span className="font-semibold text-emerald-400 uppercase tracking-wider block mb-1">
                   Security Rationale
                 </span>
-                {prop.rationale}
+                {(prop.remediation_steps || []).join(" · ") || prop.summary}
               </div>
 
               {/* Unified Diff Viewer */}
-              {prop.diff && (
+              {prop.patch_diff && (
                 <div>
                   <span className="font-semibold text-slate-400 uppercase tracking-wider text-xs block mb-2">
                     Proposed Code Changes (Unified Diff)
                   </span>
                   <div className="bg-[#090d16] border border-border rounded-xl p-4 font-mono text-xs overflow-x-auto leading-relaxed">
-                    {prop.diff.split('\n').map((line, idx) => {
+                    {prop.patch_diff.split('\n').map((line, idx) => {
                       let color = 'text-slate-300';
                       let bg = '';
                       if (line.startsWith('+') && !line.startsWith('+++')) {
@@ -208,7 +210,8 @@ export const RemediationPage: React.FC = () => {
                 </div>
               )}
             </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>

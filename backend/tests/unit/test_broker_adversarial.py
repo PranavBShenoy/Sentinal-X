@@ -52,8 +52,11 @@ def test_validate_workspace_path_rejects_dotdot_escape():
         validate_workspace_path(evil)
 
 
-def test_validate_workspace_path_rejects_symlink_escape():
+def test_validate_workspace_path_rejects_symlink_escape(tmp_path, monkeypatch):
     """A symlink inside the workspace base pointing outside must be rejected."""
+    workspace_root = tmp_path / "workspaces"
+    workspace_root.mkdir()
+    monkeypatch.setattr(settings, "ASSESSMENT_WORKSPACE_BASE", str(workspace_root))
     base = settings.ASSESSMENT_WORKSPACE_BASE.rstrip("/")
     with tempfile.TemporaryDirectory(dir=base) as tmpdir:
         link = Path(tmpdir) / "escape-link"

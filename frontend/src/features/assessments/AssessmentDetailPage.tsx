@@ -143,7 +143,7 @@ export const AssessmentDetailPage: React.FC = () => {
               <span className="text-xs uppercase tracking-wider font-semibold text-slate-400 block mb-1">
                 Overall Risk Score
               </span>
-              <RiskScoreMeter score={assessment.overall_risk_score} size="md" />
+              <RiskScoreMeter score={assessment.risk_score} size="md" />
             </div>
           </div>
         </div>

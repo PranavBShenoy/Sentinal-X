@@ -9,7 +9,9 @@ NOT accepted from the caller. Unknown fields are rejected.
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Literal, Optional
+import ipaddress
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -225,7 +227,42 @@ class JobSubmitRequest(BaseModel):
     artifact_sha256: Optional[str] = Field(
         None,
         description="SHA-256 of workspace tarball (build only)",
+        pattern=r"^(?:sha256:)?[0-9a-fA-F]{64}$",
     )
+    image_tag: Optional[str] = None
+    container_name: Optional[str] = None
+    network_name: Optional[str] = None
+    app_port: Optional[int] = Field(None, ge=1, le=65535)
+    cpu_limit: Literal["1.0"]
+    mem_limit: Literal["512m"]
+    drop_capabilities: list[Literal["ALL"]]
+    no_new_privileges: Literal[True]
+    read_only_rootfs: Literal[True]
+
+    @field_validator("drop_capabilities")
+    @classmethod
+    def require_all_capabilities_dropped(cls, value: list[str]) -> list[str]:
+        if value != ["ALL"]:
+            raise ValueError('drop_capabilities must equal ["ALL"]')
+        return value
+
+    @field_validator("artifact_url")
+    @classmethod
+    def validate_artifact_url(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        parsed = urlsplit(value)
+        if parsed.scheme.lower() != "https" or not parsed.hostname:
+            raise ValueError("artifact_url must be an HTTPS URL with a hostname")
+        if parsed.username or parsed.password:
+            raise ValueError("artifact_url must not contain URL credentials")
+        try:
+            address = ipaddress.ip_address(parsed.hostname)
+        except ValueError:
+            address = None
+        if address is not None and not address.is_global:
+            raise ValueError("artifact_url must not target a private or reserved IP")
+        return value
 
 
 class JobSubmitResponse(BaseModel):

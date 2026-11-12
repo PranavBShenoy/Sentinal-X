@@ -198,8 +198,8 @@ export const ReportsPage: React.FC = () => {
                     </h4>
                     <div className="flex items-center gap-3 text-xs text-slate-400 mt-0.5">
                       <span>Generated: {formatDate(rep.generated_at)}</span>
-                      {rep.file_size && (
-                        <span>Size: {(rep.file_size / 1024).toFixed(1)} KB</span>
+                      {rep.file_size_bytes && (
+                        <span>Size: {(rep.file_size_bytes / 1024).toFixed(1)} KB</span>
                       )}
                     </div>
                   </div>

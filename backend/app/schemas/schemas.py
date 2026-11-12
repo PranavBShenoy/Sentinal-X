@@ -8,7 +8,9 @@ exclude sensitive fields (passwords, tokens, encryption keys).
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, List, Optional
+import ipaddress
+from typing import Any, Dict, List, Optional
+from urllib.parse import urlsplit
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
@@ -134,12 +136,36 @@ class AssessmentConfig(BaseModel):
     enable_git_history_scan: bool = False
     target_url: Optional[str] = Field(None, description="Existing staging URL to test")
     openapi_spec_url: Optional[str] = None
+    # A signed, allowlisted artifact reference provisioned by the artifact
+    # storage workflow; the Runtime Host verifies the hash before extraction.
+    artifact_url: Optional[str] = None
+    artifact_sha256: Optional[str] = Field(
+        None, pattern=r"^(?:sha256:)?[0-9a-fA-F]{64}$"
+    )
     # Test credentials (encrypted at rest, never logged)
     test_username: Optional[str] = None
     test_password: Optional[str] = None  # Will be encrypted before storage
     scan_depth: str = Field(default="standard", pattern=r"^(quick|standard|deep)$")
     # Maximum concurrent scanners
     max_concurrent_scanners: int = Field(default=2, ge=1, le=4)
+
+    @field_validator("artifact_url")
+    @classmethod
+    def validate_artifact_url(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        parsed = urlsplit(value)
+        if parsed.scheme.lower() != "https" or not parsed.hostname:
+            raise ValueError("artifact_url must be an HTTPS URL with a hostname")
+        if parsed.username or parsed.password:
+            raise ValueError("artifact_url must not contain URL credentials")
+        try:
+            address = ipaddress.ip_address(parsed.hostname)
+        except ValueError:
+            address = None
+        if address is not None and not address.is_global:
+            raise ValueError("artifact_url must not target a private or reserved IP")
+        return value
 
 
 class AssessmentCreate(BaseModel):
@@ -160,6 +186,7 @@ class AssessmentResponse(BaseSchema):
     current_stage: Optional[str]
     risk_score: Optional[float]
     risk_level: Optional[str]
+    findings_count: int = 0
     created_at: datetime
     started_at: Optional[datetime]
     completed_at: Optional[datetime]
@@ -173,6 +200,13 @@ class AssessmentProgress(BaseSchema):
     scan_jobs: List["ScanJobResponse"]
     runtime_status: Optional[str]
     findings_count: int
+    completed_percentage: float = 0.0
+    stages: Dict[str, str] = {}
+    checks: Dict[str, str] = {}
+    critical_count: int = 0
+    high_count: int = 0
+    medium_count: int = 0
+    low_count: int = 0
 
 
 # ---------------------------------------------------------------------------

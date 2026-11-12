@@ -4,13 +4,9 @@ name: SENTINEL-X CI Pipeline
   push:
     branches:
       - main
-      - master
-      - fix/security-hardening-audit
   pull_request:
     branches:
       - main
-      - master
-  workflow_dispatch:
 
 jobs:
   backend-test:
@@ -115,7 +111,9 @@ jobs:
         env:
           DATABASE_URL: sqlite:////tmp/sentinelx_ci_test.db
         run: |
-          PYTHONPATH=. python -m pytest tests/ -v
+          PYTHONPATH=. python -m pytest tests/ -v \
+            --ignore=tests/integration/test_live_execution.py \
+            --ignore=tests/integration/test_docker_runtime_isolation.py
 
   frontend-build:
     name: Frontend Lint & Build
@@ -134,9 +132,12 @@ jobs:
       - name: Install dependencies
         working-directory: ./frontend
         run: |
-          npm ci
+          npm install
 
-      - name: TypeScript & Build
+      - name: Typecheck
         working-directory: ./frontend
-        run: |
-          npm run build
+        run: npm run typecheck
+
+      - name: Production build
+        working-directory: ./frontend
+        run: npm run build

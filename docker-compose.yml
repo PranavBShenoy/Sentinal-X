@@ -41,6 +41,22 @@ services:
     networks:
       - sentinelx-internal
 
+  # One-shot schema migration. API and worker wait for this job to complete.
+  migrate:
+    build:
+      context: ./backend
+      dockerfile: ../infrastructure/docker/Dockerfile.api
+    container_name: sentinelx-migrate
+    restart: "no"
+    command: ["python", "-m", "alembic", "upgrade", "head"]
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-sentinelx}:${POSTGRES_PASSWORD:-sentinelx_dev_pass_change_in_prod}@postgres:5432/${POSTGRES_DB:-sentinelx}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - sentinelx-internal
+
   api:
     build:
       context: ./backend
@@ -52,7 +68,8 @@ services:
       # frontend on the same host. Do not expose 0.0.0.0:8000 directly.
       - "127.0.0.1:8000:8000"
     environment:
-      - ENVIRONMENT=${ENVIRONMENT:-development}
+      - APP_ENV=${APP_ENV:-development}
+      - ENVIRONMENT=${ENVIRONMENT:-${APP_ENV:-development}}
       - DATABASE_URL=postgresql://${POSTGRES_USER:-sentinelx}:${POSTGRES_PASSWORD:-sentinelx_dev_pass_change_in_prod}@postgres:5432/${POSTGRES_DB:-sentinelx}
       - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
       - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://redis:6379/0}
@@ -69,18 +86,28 @@ services:
       - BROKER_URL=${BROKER_URL:-http://broker:8001}
       - BROKER_API_KEY=${BROKER_API_KEY:?BROKER_API_KEY must be set explicitly; no default}
       - BROKER_AUTH_REQUIRED=${BROKER_AUTH_REQUIRED:-true}
+      - RUNTIME_MODE=remote
+      - JOB_TOKEN_PRIVATE_KEY_PATH=/run/secrets/job_token_private_key
+      - JOB_TOKEN_PUBLIC_KEY_PATH=/etc/runtime_host/public_key.pem
+      - RUNTIME_HOST_AUDIENCE=${RUNTIME_HOST_AUDIENCE:-runtime-host}
+    secrets:
+      - job_token_private_key
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     volumes:
       - ./rules:/app/rules:ro
+      - ./runtime_host/certs/public_key.pem:/etc/runtime_host/public_key.pem:ro
       - workspace_data:/var/lib/sentinelx/workspaces
       - reports_data:/var/lib/sentinelx/reports
     networks:
       - sentinelx-internal
       - sentinelx-broker
+      - sentinelx-runtime
       - sentinelx-public
 
   worker:
@@ -90,7 +117,8 @@ services:
     container_name: sentinelx-worker
     restart: unless-stopped
     environment:
-      - ENVIRONMENT=${ENVIRONMENT:-development}
+      - APP_ENV=${APP_ENV:-development}
+      - ENVIRONMENT=${ENVIRONMENT:-${APP_ENV:-development}}
       - DATABASE_URL=postgresql://${POSTGRES_USER:-sentinelx}:${POSTGRES_PASSWORD:-sentinelx_dev_pass_change_in_prod}@postgres:5432/${POSTGRES_DB:-sentinelx}
       - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
       - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://redis:6379/0}
@@ -106,35 +134,51 @@ services:
       - BROKER_URL=${BROKER_URL:-http://broker:8001}
       - BROKER_API_KEY=${BROKER_API_KEY:?BROKER_API_KEY must be set explicitly; no default}
       - BROKER_AUTH_REQUIRED=${BROKER_AUTH_REQUIRED:-true}
+      - RUNTIME_MODE=remote
+      - JOB_TOKEN_PRIVATE_KEY_PATH=/run/secrets/job_token_private_key
+      - JOB_TOKEN_PUBLIC_KEY_PATH=/etc/runtime_host/public_key.pem
+      - RUNTIME_HOST_AUDIENCE=${RUNTIME_HOST_AUDIENCE:-runtime-host}
+    secrets:
+      - job_token_private_key
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
-      broker:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     volumes:
       # The worker intentionally does NOT mount /var/run/docker.sock.
-      # All Docker operations go through the authenticated runtime broker.
+      # All Docker operations go through the authenticated runtime broker
+      # (development, --profile broker) or the remote Runtime Host
+      # (production, default mode).
       - ./rules:/app/rules:ro
+      - ./runtime_host/certs/public_key.pem:/etc/runtime_host/public_key.pem:ro
       - workspace_data:/var/lib/sentinelx/workspaces
       - reports_data:/var/lib/sentinelx/reports
     networks:
       - sentinelx-internal
       - sentinelx-broker
+      - sentinelx-runtime
 
   # ---------------------------------------------------------------------------
   # Runtime Broker — policy-enforcing Docker boundary.
   # Holds the Docker socket; worker and API talk to it over authenticated HTTP.
+  # Profile: only started with --profile broker (development/staging only).
+  # Production must NOT start the broker — it shares the host Docker socket.
   # ---------------------------------------------------------------------------
   broker:
+    profiles:
+      - development
+      - broker
     build:
       context: ./backend
       dockerfile: ../infrastructure/docker/Dockerfile.broker
     container_name: sentinelx-broker
     restart: unless-stopped
     environment:
-      - ENVIRONMENT=${ENVIRONMENT:-development}
+      - APP_ENV=${APP_ENV:-development}
+      - ENVIRONMENT=${ENVIRONMENT:-${APP_ENV:-development}}
       - BROKER_API_KEY=${BROKER_API_KEY:?BROKER_API_KEY must be set explicitly; no default}
       - BROKER_AUTH_REQUIRED=${BROKER_AUTH_REQUIRED:-true}
       - ASSESSMENT_WORKSPACE_BASE=${ASSESSMENT_WORKSPACE_BASE:-/var/lib/sentinelx/workspaces}
@@ -156,6 +200,103 @@ services:
       # datastore or queue.
       - sentinelx-broker
 
+  # ---------------------------------------------------------------------------
+  # Runtime Host — separate execution plane (separate VM in production).
+  # Runs its own Docker daemon; control plane talks over mTLS + job tokens.
+  # ---------------------------------------------------------------------------
+  runtime_host:
+    build:
+      context: ./runtime_host
+      dockerfile: Dockerfile
+    container_name: sentinelx-runtime-host
+    restart: unless-stopped
+    environment:
+      # The Runtime Host reads APP_ENV (with ENVIRONMENT as a fallback).
+      - APP_ENV=${APP_ENV:-development}
+      - ENVIRONMENT=${ENVIRONMENT:-${APP_ENV:-development}}
+      - RUNTIME_MODE=remote
+      - RUNTIME_HOST_PUBLIC_KEY_PATH=/etc/runtime_host/public_key.pem
+      - RUNTIME_HOST_CLIENT_CA_PATH=/etc/runtime_host/client_ca.crt
+      - RUNTIME_HOST_AUDIENCE=${RUNTIME_HOST_AUDIENCE:-runtime-host}
+      - RUNTIME_HOST_PORT=8443
+      - RUNTIME_ARTIFACT_ORIGINS=${RUNTIME_ARTIFACT_ORIGINS:-}
+      - RUNTIME_HOST_ADVERTISED_IP=${RUNTIME_HOST_ADVERTISED_IP:-}
+      - ADVERTISED_HOSTNAME=${ADVERTISED_HOSTNAME:-}
+      - RUNTIME_HOST_BIND_IP=${RUNTIME_HOST_BIND_IP:-}
+      - SENTINELX_NONCE_STORE_PATH=/var/lib/runtime_host/nonces.db
+      - RUNTIME_HOST_PROXY_TOKEN_FILE=/run/secrets/runtime_host_proxy_token
+      - DOCKER_HOST=unix:///run/docker/docker.sock
+    secrets:
+      - runtime_host_proxy_token
+    # Deliberately no published ports. The backend is reachable only from the
+    # mTLS terminator over sentinelx-runtime-edge.
+    # Only public material and the JWT verification key are mounted. The CA
+    # private key and the control-plane client key never reach this container.
+    volumes:
+      - ./runtime_host/certs/public_key.pem:/etc/runtime_host/public_key.pem:ro
+      - ./runtime_host/certs/server/client_ca.crt:/etc/runtime_host/client_ca.crt:ro
+      - runtime_host_data:/var/lib/runtime_host
+      - runtime_engine_socket:/run/docker
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      # The Runtime Host joins only the proxy-facing edge. Its isolated Docker
+      # daemon is reached through a private Unix socket volume.
+      - sentinelx-runtime-edge
+
+  runtime_engine:
+    image: docker:dind
+    container_name: sentinelx-runtime-engine
+    privileged: true
+    restart: unless-stopped
+    environment:
+      - DOCKER_TLS_CERTDIR=
+    # Keep the daemon on a Unix socket shared only with runtime_host. The
+    # default dind entrypoint exposes unauthenticated TCP when TLS is disabled.
+    entrypoint: ["dockerd"]
+    command: ["--host=unix:///run/docker/docker.sock"]
+    volumes:
+      - runtime_engine_socket:/run/docker
+    networks:
+      - sentinelx-runtime
+
+  runtime_host_proxy:
+    build:
+      context: ./runtime_host/nginx
+      dockerfile: Dockerfile
+    container_name: sentinelx-runtime-proxy
+    restart: unless-stopped
+    depends_on:
+      - runtime_host
+    environment:
+      - NGINX_SERVER_CERT=/etc/nginx/tls/server.crt
+      - NGINX_SERVER_KEY=/etc/nginx/tls/server.key
+      - NGINX_CLIENT_CA=/etc/nginx/tls/client_ca.crt
+      - NGINX_CLIENT_CRL=${NGINX_CLIENT_CRL:-}
+      - NGINX_REQUIRE_CRL=${NGINX_REQUIRE_CRL:-false}
+      - NGINX_VERIFY_DEPTH=${NGINX_VERIFY_DEPTH:-2}
+      - NGINX_RUNTIME_DIR=/etc/nginx/runtime
+      - NGINX_UPSTREAM=http://runtime_host:8443
+      - RUNTIME_HOST_PROXY_TOKEN_FILE=/run/secrets/runtime_host_proxy_token
+    secrets:
+      - runtime_host_proxy_token
+    ports:
+      # Only public Runtime Host entry point. Loopback-only in this deployment.
+      - "127.0.0.1:8443:8443"
+    # Individual read-only mounts: the proxy never receives ca.key,
+    # client.key, or client.crt.
+    volumes:
+      - ./runtime_host/certs/server/server.crt:/etc/nginx/tls/server.crt:ro
+      - ./runtime_host/certs/server/server.key:/etc/nginx/tls/server.key:ro
+      - ./runtime_host/certs/server/client_ca.crt:/etc/nginx/tls/client_ca.crt:ro
+      - ./runtime_host/certs/crl:/etc/nginx/tls/crl:ro
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      # Control plane reaches only this mTLS proxy on the runtime network.
+      - sentinelx-runtime
+      - sentinelx-runtime-edge
+
   frontend:
     build:
       context: ./frontend
@@ -176,6 +317,16 @@ volumes:
   redis_data:
   workspace_data:
   reports_data:
+  runtime_host_data:
+  runtime_engine_socket:
+
+secrets:
+  job_token_private_key:
+    file: ${JOB_TOKEN_PRIVATE_KEY_FILE:-./runtime_host/certs/client/job_signing_private.pem}
+  runtime_host_proxy_token:
+    # Protected host file (mode 0600) containing >=32 url-safe random chars.
+    # Generate with: python3 -c "import secrets; print(secrets.token_urlsafe(48))"
+    file: ${RUNTIME_HOST_PROXY_TOKEN_SECRET_FILE:-./runtime_host/certs/proxy_token}
 
 networks:
   sentinelx-internal:
@@ -186,3 +337,11 @@ networks:
     internal: true
   sentinelx-public:
     driver: bridge
+  sentinelx-runtime:
+    # Control-plane to mTLS proxy path. The Docker daemon has no TCP listener;
+    # Runtime Host reaches it through the private Unix socket volume.
+    internal: true
+  sentinelx-runtime-edge:
+    # Private backend side of the mTLS terminator. Only runtime_host and
+    # runtime_host_proxy are attached; the Runtime Host has no other network.
+    internal: true

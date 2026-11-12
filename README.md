@@ -1,164 +1,74 @@
 # SENTINEL-X
 
-> **AI-Powered Application & Software Supply-Chain Security Assessment Platform**
+## AI-Powered Application Security & DevSecOps Platform
 
-SENTINEL-X is an enterprise-grade security assessment platform designed to bridge the gap between static application security testing (SAST), software supply-chain analysis (SBOM & SCA), isolated ephemeral runtime orchestration, active dynamic application security testing (DAST), and evidence-grounded AI remediation.
+SENTINEL-X brings application security analysis, software supply-chain inspection, risk scoring, and human-reviewed AI remediation into one workflow. It combines a React security console with a Python control plane and a separately isolated execution plane.
 
----
+## Architecture
 
-## Key Features
+The **Control Plane** uses FastAPI for authenticated API requests and Celery workers for assessment orchestration. It stores platform state in PostgreSQL and dispatches authorized execution jobs to the **Execution Plane**.
 
-- **Multi-Engine Static & Secret Analysis**: Semgrep SAST, Gitleaks secret detection with automatic credential masking, and Trivy infrastructure/configuration audits.
-- **Supply-Chain Visibility & Graph**: CycloneDX 1.5 SBOM generation with Syft, vulnerability intelligence with Anchore Grype and OSV.dev, and NetworkX directed graph analysis for transitive reachability.
-- **SSRF Defense Architecture (SEC-01)**: Comprehensive IP and DNS verification engine with socket-level connection pinning (`PinnedSSRFNetworkBackend`), blocking loopback, link-local metadata (`169.254.169.254`), RFC 1918 subnets, alternative IP encodings, and DNS rebinding attacks.
-- **Shared Atomic Rate Limiting (OPS-01)**: Distributed Redis-backed sliding-window rate limiter executed via Lua script, client IP spoofing protection with `TRUSTED_PROXIES`, and full RFC 6585 compliance.
-- **Hardened Isolated Docker Runtime (INFRA-01)**: Ephemeral application provisioning with dropped capabilities (`cap_drop=['ALL']`), no-new-privileges, read-only root filesystems, non-root user execution (UID 10001 / node), memory/CPU caps, and active HTTP health probing.
-- **Deterministic 0–10 Risk Engine**: Mathematical scoring factoring base CVSS, reachability, exposure context, and scanner confidence with clear rationale text.
-- **Evidence-Grounded AI Remediation**: OpenRouter LLM integration with prompt injection defenses, Pydantic validation, and human-in-the-loop diff approval.
-- **Enterprise Reporting**: OASIS SARIF 2.1.0, Machine JSON, CSV, and WeasyPrint PDF reports.
-- **Modern Security Dashboard**: React 18, TypeScript, Vite, and Tailwind CSS dark-mode security console.
-
----
-
-## System Architecture
+The **Execution Plane** runs in the Runtime Host with its own Docker-in-Docker engine. The control plane reaches the Runtime Host through an Nginx mTLS proxy; the Runtime Host is isolated on the proxy-facing edge and accesses its Docker engine through a private Unix socket. Scanned projects run in short-lived containers with a fixed security policy.
 
 ```mermaid
-flowchart TD
-    User([Security Analyst / Developer]) -->|HTTPS| Frontend[React + Vite Frontend\nPort 3000]
-    Frontend -->|REST API / JWT| API[FastAPI Control Plane\nPort 8000]
-    API -->|Persistence| DB[(PostgreSQL 16)]
-    API -->|Task Dispatch| Queue[(Redis 7)]
-    Queue -->|Worker Jobs| Worker[Celery Execution Worker]
-    Worker -->|Fetch| GitRepo[Target Git Repository]
-    Worker -->|SAST & Secrets| Scanners[Semgrep / Gitleaks / Trivy]
-    Worker -->|SBOM & CVEs| SupplyChain[Syft / Grype / OSV]
-    Worker -->|Ephemeral Provisioning| Docker[Sandboxed Docker Runtime\ncap_drop=ALL]
-    Worker -->|DAST| DAST[OWASP ZAP & Native Probes]
-    Worker -->|Correlation & Risk| Engine[NetworkX + Risk Engine]
-    Worker -->|Remediation & Patch| AI[OpenRouter LLM]
-    Worker -->|SARIF / JSON / PDF| Reports[Reports Engine]
+flowchart LR
+    User[Analyst] --> UI[React / TypeScript UI]
+    UI --> API[FastAPI Control Plane]
+    API --> DB[(PostgreSQL)]
+    API --> Queue[Redis / Celery]
+    Queue --> Worker[Celery Worker]
+    Worker -->|mTLS + Ed25519 capability token| Proxy[Nginx mTLS Proxy]
+    Proxy --> Host[Runtime Host]
+    Host -->|private Unix socket| Engine[Isolated Docker-in-Docker Engine]
+    Engine --> Job[Ephemeral assessment container]
 ```
 
----
+## Security Controls
+
+- **Zero-Trust mTLS boundary:** Control-plane calls to the Runtime Host pass through a client-certificate-verifying Nginx proxy.
+- **Ed25519 capability tokens:** Short-lived, scoped tokens bind runtime actions to the authorized tenant, assessment, operation, and job.
+- **Atomic token consumption:** Authorization state is consumed atomically to prevent replay and time-of-check/time-of-use races.
+- **SSRF protections:** Artifact delivery requires HTTPS, validates configured origins, rejects private and special-use addresses, verifies SHA-256, and extracts archives with path containment checks.
+- **Constrained containers:** Runtime policy drops all Linux capabilities (`cap_drop: ALL`), enables `no-new-privileges`, uses a read-only root filesystem, and sets CPU and memory limits.
+- **Isolated execution networking:** Runtime Host traffic to the control plane enters through the proxy boundary; assessment workloads use a restricted network policy.
 
 ## Technology Stack
 
-| Layer | Technologies |
-|---|---|
-| **Frontend** | React 18, TypeScript, Vite, Tailwind CSS, Lucide Icons |
-| **Backend API** | Python 3.11+, FastAPI, Pydantic v2, SQLAlchemy 2.0, Alembic |
-| **Task Queue** | Celery, Redis |
-| **Database** | PostgreSQL 16 (production), SQLite (unit/integration test suite) |
-| **Security Engines** | Semgrep, Gitleaks, Anchore Syft, Anchore Grype, Trivy, OWASP ZAP |
-| **Intelligence** | OSV.dev REST API, NVD, GitHub Security Advisories |
-| **Orchestration** | Docker Engine SDK, Linux cgroups & namespaces |
-| **Reporting** | WeasyPrint, OASIS SARIF v2.1.0 JSON Schema |
+- **Frontend:** React, TypeScript, Vite
+- **Control Plane:** Python, FastAPI, Celery
+- **Persistence and messaging:** PostgreSQL, SQLite for local/test stores, Redis
+- **Execution:** Docker, Docker-in-Docker Runtime Host, Nginx mTLS proxy
+- **Security analysis:** SAST, secret scanning, SBOM and dependency analysis, deterministic risk scoring, and optional AI-assisted remediation
 
----
+## Getting Started
 
-## Quickstart with Docker Compose
+1. Clone the repository and enter its directory:
 
-1. **Clone the repository**:
    ```bash
-   git clone https://github.com/organization/sentinel-x.git
-   cd sentinel-x
+   git clone <repository-url>
+   cd Sentinal-X
    ```
 
-2. **Configure Environment Variables**:
+2. Create the local environment file and configure the required secrets, signing keys, certificates, database credentials, and runtime settings from `.env.example`:
+
    ```bash
    cp .env.example .env
-   # Edit .env to configure JWT_SECRET_KEY, ENCRYPTION_KEY, and optional OPENROUTER_API_KEY
    ```
 
-3. **Start the Platform**:
+3. Start the Compose stack:
+
    ```bash
-   docker compose up --build -d
+   docker compose up -d
    ```
 
-4. **Access the Web Console**:
-   - Frontend Dashboard: [http://localhost:3000](http://localhost:3000)
-   - FastAPI Interactive Docs: [http://localhost:8000/docs](http://localhost:8000/docs)
-   - API Health Check: [http://localhost:8000/health](http://localhost:8000/health)
+Use non-placeholder credentials and correctly provisioned certificates for shared or production environments. See [ARCHITECTURE.md](ARCHITECTURE.md) and [STAGE_3B_EXECUTION_GUIDE.md](STAGE_3B_EXECUTION_GUIDE.md) for design and execution details.
 
----
+## Validation
 
-## Local Development & Testing
+Run component checks from their respective directories:
 
-### Backend Setup & Test Suite
 ```bash
-# Navigate to backend
-cd backend
-
-# Install dependencies
-pip install .
-pip install pytest pytest-cov
-
-# Run migrations
-alembic upgrade head
-
-# Run complete test suite (124 tests: 123 passed, 1 skipped)
-PYTHONPATH=. python -m pytest tests/ -v
+(cd backend && python -m pytest tests/ --ignore=tests/integration/test_live_execution.py)
+(cd runtime_host && PYTHONPATH=.. python -m pytest tests/)
+(cd frontend && npm run typecheck && npm run build)
 ```
-
-### Real Browser E2E Test Suite (Headless Chromium & Selenium)
-```bash
-# Verify headless Chromium & Selenium E2E flow
-PYTHONPATH=. python -m pytest tests/e2e/test_browser_e2e.py -v
-```
-
-### Frontend Setup & Build
-```bash
-# Navigate to frontend
-cd frontend
-
-# Install dependencies
-npm install
-
-# Run local development server
-npm run dev
-
-# Run production build & TypeScript validation
-npm run build
-```
-
----
-
-## Project Structure
-
-```text
-sentinel-x/
-├── backend/
-│   ├── app/
-│   │   ├── analysis/          # Normalization, correlation, graph, risk engine
-│   │   ├── api/               # FastAPI endpoints, auth dependencies, routers
-│   │   ├── core/              # Config, security, logging, subprocess, redaction
-│   │   ├── integrations/      # Semgrep, Gitleaks, Syft, Grype, Trivy, ZAP, OSV, OpenRouter
-│   │   ├── models/            # SQLAlchemy 2.0 database entities
-│   │   ├── reporting/         # PDF, SARIF, JSON, CSV generators
-│   │   ├── runtime/           # Project detection, Docker orchestrator, cleaner
-│   │   ├── schemas/           # Pydantic v2 validation models
-│   │   ├── services/          # Repository fetch, pipeline orchestrator
-│   │   └── workers/           # Celery application & task handlers
-│   ├── migrations/            # Alembic schema migrations
-│   └── tests/                 # Unit, integration, and end-to-end test suites
-├── frontend/
-│   ├── src/
-│   │   ├── app/               # Main application routing and context
-│   │   ├── components/        # Badges, meters, navbar, sidebar, layout
-│   │   ├── features/          # Auth, dashboard, projects, assessments, findings, remediation, reports
-│   │   ├── lib/               # Typed API client, utility functions
-│   │   └── types/             # Full TypeScript interfaces matching backend models
-├── infrastructure/
-│   └── docker/                # Multi-stage Dockerfiles and Nginx reverse proxy configs
-├── docs/                      # Architectural, threat model, and operational guides
-├── tests/fixtures/            # Vulnerable test fixtures (SQLi, secrets, bad headers, deps)
-├── docker-compose.yml         # Multi-service local orchestrator
-├── LEARNING_GUIDE.md          # Comprehensive defense and interview master guide
-└── SECURITY.md                # Security disclosure and hardening policy
-```
-
----
-
-## License
-
-This project is licensed under the Apache 2.0 License.

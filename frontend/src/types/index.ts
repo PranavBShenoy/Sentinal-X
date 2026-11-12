@@ -36,6 +36,9 @@ export type FindingStatus =
   | 'MITIGATED'
   | 'RESOLVED';
 
+/** Deterministic risk scores produced by the backend RiskEngine are 0–10. */
+export type RiskScore = number;
+
 export interface User {
   id: string;
   email: string;
@@ -77,29 +80,33 @@ export interface Repository {
 
 export interface ScanJob {
   id: string;
-  assessment_id: string;
   tool_name: string;
-  job_type: string;
   status: string;
+  check_status: string | null;
+  tool_version: string | null;
+  findings_count: number;
   started_at: string | null;
   completed_at: string | null;
-  exit_code: number | null;
-  findings_count: number;
+  execution_time_seconds: number | null;
   error_message: string | null;
-  created_at: string;
+  /** Legacy UI aliases; ApiClient derives these from ScanJobResponse. */
+  job_type: string;
+  exit_code: number | null;
 }
+
+export type ScanJobResponse = Omit<ScanJob, 'job_type' | 'exit_code'>;
 
 export interface Assessment {
   id: string;
   project_id: string;
-  repository_id: string;
-  branch: string;
+  repository_id: string | null;
+  branch: string | null;
   commit_sha: string | null;
   target_url: string | null;
   status: AssessmentStatus;
   current_stage: string | null;
-  overall_risk_score: number | null;
-  max_severity: Severity | null;
+  risk_score: RiskScore | null;
+  risk_level: string | null;
   findings_count: number;
   error_message: string | null;
   created_at: string;
@@ -111,6 +118,8 @@ export interface AssessmentProgress {
   assessment_id: string;
   status: AssessmentStatus;
   current_stage: string | null;
+  scan_jobs: ScanJob[];
+  runtime_status: string | null;
   completed_percentage: number;
   stages: Record<string, string>;
   checks: Record<string, string>;
@@ -119,6 +128,54 @@ export interface AssessmentProgress {
   high_count: number;
   medium_count: number;
   low_count: number;
+}
+
+export type AssessmentProgressResponse = Omit<AssessmentProgress, 'scan_jobs'> & {
+  scan_jobs: ScanJobResponse[];
+};
+
+/** Assessment configuration accepted by the Control Plane API. */
+export interface AssessmentConfig {
+  enable_active_dast?: boolean;
+  enable_git_history_scan?: boolean;
+  target_url?: string;
+  openapi_spec_url?: string;
+  artifact_url?: string;
+  /** SHA-256 digest, optionally prefixed with `sha256:`. */
+  artifact_sha256?: string;
+  test_username?: string;
+  test_password?: string;
+  scan_depth?: 'quick' | 'standard' | 'deep';
+  max_concurrent_scanners?: number;
+}
+
+export interface AssessmentCreateRequest {
+  repository_id: string;
+  branch?: string;
+  commit_sha?: string;
+  config?: AssessmentConfig;
+}
+
+/** Control Plane → Runtime Host job request contract. */
+export interface JobSubmitRequest {
+  job_id: string;
+  tenant_id: string;
+  assessment_id: string;
+  operation: 'build' | 'run' | 'cleanup' | 'cancel';
+  resources: string[];
+  resource_limits: Record<string, unknown>;
+  idempotency_key: string;
+  artifact_url?: string;
+  artifact_sha256?: string;
+  image_tag?: string;
+  container_name?: string;
+  network_name?: string;
+  app_port?: number;
+  cpu_limit: '1.0';
+  mem_limit: '512m';
+  drop_capabilities: ['ALL'];
+  no_new_privileges: true;
+  read_only_rootfs: true;
 }
 
 export interface Evidence {
@@ -130,27 +187,47 @@ export interface Evidence {
   created_at: string;
 }
 
-export interface Finding {
+/** Exact nullable response fields returned by backend FindingResponse. */
+export interface FindingResponse {
   id: string;
   assessment_id: string;
-  fingerprint: string;
-  tool_name: string;
   title: string;
-  description: string;
-  severity: Severity;
-  confidence: string;
+  description: string | null;
   category: string;
-  cwe_ids: string[];
-  cve_ids: string[];
-  cvss_score: number | null;
-  risk_score: number;
+  subcategory: string | null;
+  severity: string;
+  status: string;
+  confidence: string;
+  source_tool: string;
+  rule_id: string | null;
   file_path: string | null;
   line_start: number | null;
   line_end: number | null;
-  target_endpoint: string | null;
-  status: FindingStatus;
-  reachability: string;
+  endpoint: string | null;
+  component: string | null;
+  cve_ids: string[] | null;
+  cvss_score: number | null;
+  affected_version: string | null;
+  fixed_version: string | null;
+  risk_score: RiskScore | null;
+  risk_rationale: string | null;
   ai_explanation: string | null;
+  ai_impact: string | null;
+  ai_remediation_steps: string[] | null;
+  code_snippet: string | null;
+  first_seen_at: string;
+  last_seen_at: string;
+}
+
+/** Presentation shape consumed by existing findings UI; normalized by ApiClient. */
+export interface Finding extends Omit<FindingResponse, 'risk_score' | 'cve_ids'> {
+  fingerprint: string;
+  tool_name: string;
+  cwe_ids: string[];
+  cve_ids: string[];
+  risk_score: RiskScore;
+  target_endpoint: string | null;
+  reachability: string;
   ai_remediation: string | null;
   created_at: string;
   evidence?: Evidence[];
@@ -190,14 +267,15 @@ export interface DependencyGraphData {
 
 export interface RemediationProposal {
   id: string;
+  assessment_id: string;
   finding_id: string;
-  summary: string;
-  rationale: string;
-  diff: string;
-  is_approved: boolean;
-  approved_by_id: string | null;
+  status: string;
+  summary: string | null;
+  remediation_steps: string[] | null;
+  patch_diff: string | null;
+  proposed_branch: string | null;
   approved_at: string | null;
-  verification_status: string | null;
+  pr_url: string | null;
   created_at: string;
 }
 
@@ -205,8 +283,6 @@ export interface Report {
   id: string;
   assessment_id: string;
   format: 'pdf' | 'json' | 'sarif' | 'csv';
-  file_path: string;
-  file_size: number | null;
-  sha256_hash: string | null;
+  file_size_bytes: number | null;
   generated_at: string;
 }

@@ -54,8 +54,9 @@ settings = get_settings()
 class AssessmentPipeline:
     """Coordinates all scanner stages, correlation, scoring, and reports."""
 
-    def __init__(self, assessment_id: str) -> None:
+    def __init__(self, assessment_id: str, request_id: str = None, authz_component=None) -> None:
         self.assessment_id = assessment_id
+        self.request_id = request_id
         self.repo_service = RepositoryService()
         self.semgrep = SemgrepScanner()
         self.gitleaks = GitleaksScanner()
@@ -64,7 +65,7 @@ class AssessmentPipeline:
         self.osv = OSVScanner()
         self.trivy = TrivyScanner()
         self.zap = ZapScanner()
-        self.runtime_orch = RuntimeOrchestrator()
+        self.runtime_orch = RuntimeOrchestrator(authz_component=authz_component)
         self.correlator = FindingCorrelator()
         self.graph_builder = DependencyGraphBuilder()
         self.risk_engine = RiskEngine()
@@ -152,7 +153,7 @@ class AssessmentPipeline:
 
             # If no staging URL provided, attempt automatic Docker runtime provisioning
             if not target_url:
-                runtime_res = self.runtime_orch.provision(self.assessment_id, workspace_path)
+                runtime_res = self.runtime_orch.provision(self.assessment_id, workspace_path, self.request_id)
                 target_url = runtime_res.get("target_url")
                 if runtime_res.get("status") not in (RuntimeStatus.RUNNING.value,):
                     has_partial_failures = True

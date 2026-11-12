@@ -103,6 +103,11 @@ class RuntimeClient(abc.ABC):
         Returns a dict summarizing results per step.
         """
 
+    @property
+    def supports_jobs(self) -> bool:
+        """Return True if this client supports the job-oriented interface."""
+        return False
+
     # ------------------------------------------------------------------
     # Job-oriented interface (Phase 2)
     # ------------------------------------------------------------------

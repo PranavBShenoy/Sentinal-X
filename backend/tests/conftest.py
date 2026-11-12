@@ -6,15 +6,13 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
-TEST_DB_PATH = "/tmp/sentinelx_test.db"
-if os.path.exists(TEST_DB_PATH):
-    try:
-        os.remove(TEST_DB_PATH)
-    except Exception:
-        pass
-
-os.environ["DATABASE_URL"] = f"sqlite:///{TEST_DB_PATH}"
+# Force the application settings and all test sessions onto the same
+# in-memory SQLite database. This prevents tests from touching stale or
+# read-only SQLite files left by local runs.
+TEST_DATABASE_URL = "sqlite:///:memory:"
+os.environ["DATABASE_URL"] = TEST_DATABASE_URL
 os.environ["JWT_SECRET"] = "a" * 64
 os.environ["ENCRYPTION_KEY"] = "U1RST05HX0ZFUk5FVF9LRVlfVEVTVF9PQUJDRDExMjI="
 
@@ -29,10 +27,12 @@ from app.core.security import create_access_token, hash_password
 from app.main import app
 from app.models import Project, Repository, User
 
-# Ensure database engine uses the test DB
+# Ensure database engine uses the in-memory test DB. StaticPool shares one
+# connection across the app and TestClient worker thread for each test run.
 test_engine = create_engine(
-    f"sqlite:///{TEST_DB_PATH}",
+    TEST_DATABASE_URL,
     connect_args={"check_same_thread": False},
+    poolclass=StaticPool,
 )
 database.engine = test_engine
 database.SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=test_engine)
@@ -58,11 +58,6 @@ def reset_rate_limits():
 def setup_test_db():
     Base.metadata.create_all(bind=test_engine)
     yield
-    if os.path.exists(TEST_DB_PATH):
-        try:
-            os.remove(TEST_DB_PATH)
-        except Exception:
-            pass
 
 
 @pytest.fixture(scope="function")
@@ -77,7 +72,13 @@ def db():
 
 
 @pytest.fixture(scope="function")
-def client(db):
+def app_instance():
+    """Return the application object for one test client lifecycle."""
+    return app
+
+
+@pytest.fixture(scope="function")
+def client(db, app_instance):
     def override_get_db():
         session = database.SessionLocal()
         try:
@@ -89,10 +90,14 @@ def client(db):
         finally:
             session.close()
 
-    app.dependency_overrides[get_db] = override_get_db
-    with TestClient(app) as test_client:
-        yield test_client
-    app.dependency_overrides.clear()
+    app_instance.dependency_overrides[get_db] = override_get_db
+    try:
+        # Give every test its own lifespan and AnyIO portal. Always close the
+        # client and remove overrides, including when a test fails.
+        with TestClient(app_instance) as test_client:
+            yield test_client
+    finally:
+        app_instance.dependency_overrides.clear()
 
 
 @pytest.fixture
@@ -148,6 +153,13 @@ def test_project(db, test_user):
     db.commit()
     db.refresh(project)
     return project
+
+
+@pytest.fixture
+def workspace(tmp_path):
+    """A disposable workspace directory for orchestrator provision tests."""
+    (tmp_path / "main.py").write_text("print('ok')\n")
+    return str(tmp_path)
 
 
 @pytest.fixture

@@ -7,19 +7,28 @@ These tests verify that the remote runtime client:
 - Fail-closes when the runtime host is unreachable
 - Requires a job token (never submits without one)
 - Validates responses as untrusted data
+- Rejects invalid job tokens and mismatched claims
+- Validates target URLs and response schemas
+- Never logs tokens or private keys
 
 No Docker daemon or real runtime host is required.
 """
 
 from __future__ import annotations
 
+import json
+import os
 from typing import Optional
 
 from unittest.mock import MagicMock, patch
 
 import httpx
-import json
 import pytest
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.x509.oid import NameOID
+import datetime
 
 from app.runtime.job_token import JobTokenError, sign_job_token
 from app.runtime.runtime_host_client import RemoteRuntimeClient
@@ -38,21 +47,17 @@ def _make_mock_response(
     return resp
 
 
-def _make_client(
-    *,
-    runtime_url: str = "https://runtime-host.example.com:8443",
-    client_cert: str = "/tmp/client.crt",
-    client_key: str = "/tmp/client.key",
-    ca_cert: str = "/tmp/ca.crt",
-    job_token: Optional[str] = "job-token-abc123",
-) -> RemoteRuntimeClient:
-    return RemoteRuntimeClient(
-        runtime_url=runtime_url,
-        client_cert=client_cert,
-        client_key=client_key,
-        ca_cert=ca_cert,
-        job_token=job_token,
-    )
+def _make_mock_response(
+    status_code: int = 200,
+    json_data: Optional[dict] = None,
+    text: str = "",
+) -> MagicMock:
+    """Create a mock httpx.Response."""
+    resp = MagicMock(spec=httpx.Response)
+    resp.status_code = status_code
+    resp.json.return_value = json_data or {}
+    resp.text = text or json.dumps(json_data or {})
+    return resp
 
 
 class _MockClientContext:
@@ -77,6 +82,56 @@ class _MockClientContext:
         return self._response
 
 
+def _make_client(
+    *,
+    runtime_url: str = "https://runtime-host.example.com:8443",
+    client_cert: Optional[str] = "/tmp/client.crt",
+    client_key: Optional[str] = "/tmp/client.key",
+    ca_cert: Optional[str] = "/tmp/ca.crt",
+    job_token: Optional[str] = "job-token-abc123",
+) -> RemoteRuntimeClient:
+    # Generate one matching client key/certificate pair. The CA file is a
+    # trusted test certificate; all three use current CertificateBuilder APIs.
+    if client_cert and client_key and ca_cert:
+        key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        subject = issuer = x509.Name(
+            [x509.NameAttribute(NameOID.COMMON_NAME, "test-cert")]
+        )
+        now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+        cert = (
+            x509.CertificateBuilder()
+            .subject_name(subject)
+            .issuer_name(issuer)
+            .public_key(key.public_key())
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(now)
+            .not_valid_after(now + datetime.timedelta(days=1))
+            .sign(key, hashes.SHA256())
+        )
+        pem_key = key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        )
+        pem_cert = cert.public_bytes(serialization.Encoding.PEM)
+        for path in (client_cert, client_key, ca_cert):
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(client_key, "wb") as output:
+            output.write(pem_key)
+        with open(client_cert, "wb") as output:
+            output.write(pem_cert)
+        with open(ca_cert, "wb") as output:
+            output.write(pem_cert)
+
+    return RemoteRuntimeClient(
+        runtime_url=runtime_url,
+        client_cert=client_cert,
+        client_key=client_key,
+        ca_cert=ca_cert,
+        job_token=job_token,
+    )
+
+
 class TestRemoteRuntimeClientInstantiation:
     """Tests for client instantiation and configuration."""
 
@@ -95,6 +150,43 @@ class TestRemoteRuntimeClientInstantiation:
         assert client.client_key is None
         assert client.ca_cert is None
         assert client.job_token is None
+
+    def test_remote_factory_mode_requires_https_and_complete_mtls(self):
+        with pytest.raises(ValueError, match="must use HTTPS"):
+            RemoteRuntimeClient(
+                runtime_url="http://runtime.example:8443",
+                client_cert="/tmp/client.crt",
+                client_key="/tmp/client.key",
+                ca_cert="/tmp/ca.crt",
+                require_mtls=True,
+            )
+        with pytest.raises(ValueError, match="configuration is incomplete"):
+            RemoteRuntimeClient(
+                runtime_url="https://runtime.example:8443",
+                require_mtls=True,
+            )
+
+    def test_client_creation_fails_with_missing_cert(self):
+        """Fails closed when configured cert file doesn't exist."""
+        with pytest.raises(FileNotFoundError, match="not found or unreadable"):
+            RemoteRuntimeClient(
+                runtime_url="https://runtime-host.example.com:8443",
+                client_cert="/tmp/nonexistent-client.crt",
+                client_key="/tmp/client.key",
+                ca_cert="/tmp/ca.crt",
+                job_token="job-token-abc123",
+            )
+
+    def test_client_creation_fails_with_missing_key(self):
+        """Fails closed when client key file doesn't exist."""
+        with pytest.raises(FileNotFoundError, match="not found or unreadable"):
+            RemoteRuntimeClient(
+                runtime_url="https://runtime-host.example.com:8443",
+                client_cert="/tmp/client.crt",
+                client_key="/tmp/nonexistent-client.key",
+                ca_cert="/tmp/ca.crt",
+                job_token="job-token-abc123",
+            )
 
 
 class TestRemoteRuntimeClientSubmitJob:
@@ -119,8 +211,10 @@ class TestRemoteRuntimeClientSubmitJob:
             ok, job_id, target_url = client.submit_job(
                 assessment_id="a-abc123",
                 operation="build",
+                job_id="j-abc123-build",
+                tenant_id="tenant-abc123",
                 artifact_url="https://control-plane.internal:8444/artifacts/a-abc123.tar.gz",
-                artifact_sha256="sha256:abc123def456",
+                artifact_sha256="sha256:" + "a" * 64,
             )
         assert ok is True
         assert job_id == "j-abc123-build"
@@ -155,6 +249,7 @@ class TestRemoteRuntimeClientSubmitJob:
             ok, job_id, target_url = client.submit_job(
                 assessment_id="a-abc123",
                 operation="build",
+                tenant_id="tenant-abc123",
             )
         assert ok is False
         assert job_id == "Internal server error"
@@ -169,6 +264,7 @@ class TestRemoteRuntimeClientSubmitJob:
             ok, job_id, target_url = client.submit_job(
                 assessment_id="a-abc123",
                 operation="build",
+                tenant_id="tenant-abc123",
             )
         assert ok is False
         assert "Connection refused" in job_id
@@ -462,3 +558,34 @@ class TestJobTokenSigning:
             expected_tenant_id="t-tenant1",
         )
         assert payload["jti"] == "job-abc123"
+
+    def test_job_token_rejects_wrong_audience(self):
+        from app.runtime.job_token import (
+            generate_ed25519_keypair,
+            sign_job_token,
+            verify_job_token,
+        )
+
+        private_key, public_key = generate_ed25519_keypair()
+        token = sign_job_token(
+            private_key,
+            jti="job-abc123",
+            tenant_id="t-tenant1",
+            assessment_id="a-assessment1",
+            job_id="j-job1",
+            operation="build",
+            resources=["sentinelx-cont-a-assessment1"],
+            resource_limits={},
+            token_type="mutation",
+            ttl_seconds=300,
+            audience="runtime-host-a.example.com",
+        )
+        with pytest.raises(JobTokenError, match="Audience mismatch"):
+            verify_job_token(
+                public_key,
+                token,
+                expected_operation="build",
+                expected_assessment_id="a-assessment1",
+                expected_tenant_id="t-tenant1",
+                expected_audience="runtime-host-b.example.com",
+            )

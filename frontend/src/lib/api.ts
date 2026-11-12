@@ -10,9 +10,61 @@ import {
   DependencyGraphData,
   RemediationProposal,
   Report,
+  AssessmentConfig,
+  AssessmentCreateRequest,
+  FindingResponse,
+  ScanJobResponse,
+  AssessmentProgressResponse,
 } from '../types';
 
 const API_BASE = '/api/v1';
+
+export class ApiError extends Error {
+  constructor(
+    public readonly status: number,
+    message: string,
+    public readonly detail?: unknown,
+  ) {
+    super(message);
+    this.name = 'ApiError';
+  }
+}
+
+function describeValidationDetail(detail: unknown): string {
+  if (typeof detail === 'string') return detail;
+  if (Array.isArray(detail)) {
+    return detail.map((issue) => {
+      if (!issue || typeof issue !== 'object') return String(issue);
+      const item = issue as { loc?: unknown[]; msg?: unknown };
+      const location = Array.isArray(item.loc)
+        ? item.loc.filter((part) => part !== 'body').join('.')
+        : '';
+      const message = typeof item.msg === 'string' ? item.msg : 'Invalid value';
+      return location ? `${location}: ${message}` : message;
+    }).join('; ');
+  }
+  if (detail && typeof detail === 'object') return JSON.stringify(detail);
+  return '';
+}
+
+function normalizeFinding(finding: FindingResponse): import('../types').Finding {
+  return {
+    ...finding,
+    fingerprint: finding.rule_id || finding.id,
+    tool_name: finding.source_tool,
+    cwe_ids: [],
+    cve_ids: finding.cve_ids || [],
+    risk_score: finding.risk_score ?? 0,
+    target_endpoint: finding.endpoint,
+    reachability: 'UNKNOWN',
+    ai_remediation: finding.ai_remediation_steps?.join('\n') || null,
+    created_at: finding.first_seen_at,
+  };
+}
+
+function normalizeScanJob(job: ScanJobResponse): ScanJob {
+  return { ...job, job_type: job.tool_name, exit_code: null };
+}
 
 class ApiClient {
   private accessToken: string | null = null;
@@ -65,14 +117,7 @@ class ApiClient {
     }
 
     if (!response.ok) {
-      let errorMsg = `HTTP Error ${response.status}`;
-      try {
-        const errorJson = await response.json();
-        errorMsg = errorJson.detail || errorJson.message || errorMsg;
-      } catch {
-        // use default errorMsg
-      }
-      throw new Error(errorMsg);
+      throw await this.createApiError(response);
     }
 
     if (response.status === 204) {
@@ -80,6 +125,35 @@ class ApiClient {
     }
 
     return response.json();
+  }
+
+  private async createApiError(response: Response): Promise<ApiError> {
+    const payload = await response.json().catch(() => ({}));
+    const detail = payload?.detail ?? payload?.message;
+    const description = describeValidationDetail(detail);
+    if (response.status === 403) {
+      return new ApiError(
+        403,
+        description
+          ? `Permission or authorization token was rejected: ${description}`
+          : 'Permission or authorization token was rejected (403).',
+        detail,
+      );
+    }
+    if (response.status === 422) {
+      return new ApiError(
+        422,
+        description
+          ? `Request validation failed: ${description}`
+          : 'Request validation failed (422). Check the submitted fields.',
+        detail,
+      );
+    }
+    return new ApiError(
+      response.status,
+      description || `HTTP Error ${response.status}`,
+      detail,
+    );
   }
 
   // --- Auth API ---
@@ -90,8 +164,7 @@ class ApiClient {
       body: JSON.stringify(credentials),
     });
     if (!res.ok) {
-      const err = await res.json().catch(() => ({ detail: 'Login failed' }));
-      throw new Error(err.detail || 'Invalid username or password');
+      throw await this.createApiError(res);
     }
     const data: AuthTokens = await res.json();
     this.setTokens(data);
@@ -161,12 +234,10 @@ class ApiClient {
     return this.request<Assessment[]>(`/projects/${projectId}/assessments`);
   }
 
-  async createAssessment(projectId: string, data: {
-    repository_id: string;
-    branch?: string;
-    commit_sha?: string;
-    config?: {
-      target_url?: string;
+  async createAssessment(projectId: string, data: AssessmentCreateRequest & {
+    // Existing form controls that are not part of AssessmentConfig are
+    // accepted for compatibility, then intentionally omitted from the API body.
+    config?: AssessmentConfig & {
       enable_sast?: boolean;
       enable_secrets?: boolean;
       enable_sbom?: boolean;
@@ -175,9 +246,27 @@ class ApiClient {
       enable_dast?: boolean;
     };
   }): Promise<Assessment> {
+    const config = data.config;
+    const requestBody: AssessmentCreateRequest = {
+      repository_id: data.repository_id,
+      branch: data.branch,
+      commit_sha: data.commit_sha,
+      config: config ? {
+        target_url: config.target_url,
+        enable_active_dast: config.enable_active_dast ?? config.enable_dast,
+        enable_git_history_scan: config.enable_git_history_scan,
+        openapi_spec_url: config.openapi_spec_url,
+        artifact_url: config.artifact_url,
+        artifact_sha256: config.artifact_sha256,
+        test_username: config.test_username,
+        test_password: config.test_password,
+        scan_depth: config.scan_depth,
+        max_concurrent_scanners: config.max_concurrent_scanners,
+      } : undefined,
+    };
     return this.request<Assessment>(`/projects/${projectId}/assessments`, {
       method: 'POST',
-      body: JSON.stringify(data),
+      body: JSON.stringify(requestBody),
     });
   }
 
@@ -192,11 +281,13 @@ class ApiClient {
   }
 
   async getAssessmentProgress(id: string): Promise<AssessmentProgress> {
-    return this.request<AssessmentProgress>(`/assessments/${id}/progress`);
+    const result = await this.request<AssessmentProgressResponse>(`/assessments/${id}/progress`);
+    return { ...result, scan_jobs: result.scan_jobs.map(normalizeScanJob) };
   }
 
   async getAssessmentJobs(id: string): Promise<ScanJob[]> {
-    return this.request<ScanJob[]>(`/assessments/${id}/jobs`);
+    const result = await this.request<ScanJobResponse[]>(`/assessments/${id}/jobs`);
+    return result.map(normalizeScanJob);
   }
 
   // --- Findings API ---
@@ -218,18 +309,21 @@ class ApiClient {
     if (params.page) q.set('page', String(params.page));
     if (params.page_size) q.set('page_size', String(params.page_size));
 
-    return this.request<{ items: Finding[]; total: number }>(`/findings?${q.toString()}`);
+    const result = await this.request<{ items: FindingResponse[]; total: number }>(`/findings?${q.toString()}`);
+    return { ...result, items: result.items.map(normalizeFinding) };
   }
 
   async getFinding(id: string): Promise<Finding> {
-    return this.request<Finding>(`/findings/${id}`);
+    const result = await this.request<FindingResponse>(`/findings/${id}`);
+    return normalizeFinding(result);
   }
 
   async updateFindingDisposition(id: string, status: string, notes?: string): Promise<Finding> {
-    return this.request<Finding>(`/findings/${id}/disposition`, {
+    const result = await this.request<FindingResponse>(`/findings/${id}/disposition`, {
       method: 'PATCH',
       body: JSON.stringify({ status, notes }),
     });
+    return normalizeFinding(result);
   }
 
   // --- Dependency Graph API ---
@@ -248,9 +342,14 @@ class ApiClient {
     });
   }
 
-  async approveRemediation(remediationId: string): Promise<RemediationProposal> {
+  async approveRemediation(
+    remediationId: string,
+    approved: boolean = true,
+    rejection_reason?: string,
+  ): Promise<RemediationProposal> {
     return this.request<RemediationProposal>(`/remediations/${remediationId}/approve`, {
       method: 'POST',
+      body: JSON.stringify({ approved, rejection_reason }),
     });
   }
 
@@ -267,6 +366,8 @@ class ApiClient {
   }
 
   getReportDownloadUrl(reportId: string): string {
+    // The API currently authenticates direct browser downloads with its user
+    // access JWT in the query parameter; it does not accept Runtime Host read tokens.
     const token = this.accessToken ? `?token=${encodeURIComponent(this.accessToken)}` : '';
     return `${API_BASE}/reports/${reportId}/download${token}`;
   }

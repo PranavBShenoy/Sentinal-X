@@ -12,13 +12,14 @@ Verifies:
 from __future__ import annotations
 
 from unittest.mock import patch
+from importlib import import_module
 
 import pytest
 from fastapi import HTTPException, status
-from fastapi.testclient import TestClient
 
 from app.runtime.broker.auth import require_broker_key, validate_broker_key_header
-from app.runtime.broker.app import app
+broker_app = import_module("app.runtime.broker.app")
+app = broker_app.app
 
 
 class FakeRequest:
@@ -28,7 +29,10 @@ class FakeRequest:
         self.headers = headers
 
 
-client = TestClient(app)
+@pytest.fixture(autouse=True)
+def keep_health_test_off_the_docker_daemon(monkeypatch):
+    """Health endpoint auth tests must not probe a real daemon."""
+    monkeypatch.setattr(broker_app.executor, "is_available", lambda: (False, "disabled in unit test"))
 
 
 def test_broker_auth_valid_key_accepted():
@@ -60,20 +64,20 @@ def test_broker_auth_invalid_key_rejected():
 
 
 def test_broker_auth_endpoint_rejects_without_key():
-    """The /health endpoint without a key returns 401 when auth required."""
+    """The health endpoint handler rejects missing auth without an ASGI socket."""
     with patch("app.runtime.broker.auth.settings.BROKER_API_KEY", "super-secret-key"), \
          patch("app.runtime.broker.auth.settings.BROKER_AUTH_REQUIRED", True):
-        resp = client.get("/v1/broker/health")
-        assert resp.status_code == 401
+        with pytest.raises(HTTPException) as exc:
+            broker_app.broker_health(x_broker_key=None)
+        assert exc.value.status_code == 401
 
 
 def test_broker_auth_endpoint_accepts_with_valid_key():
-    """The /health endpoint with a valid key returns 200 (broker may be down but auth passes)."""
+    """A valid key reaches the handler, with daemon health stubbed off."""
     with patch("app.runtime.broker.auth.settings.BROKER_API_KEY", "super-secret-key"), \
          patch("app.runtime.broker.auth.settings.BROKER_AUTH_REQUIRED", True):
-        resp = client.get("/v1/broker/health", headers={"X-Broker-Key": "super-secret-key"})
-        # Auth passes; docker_available may be False in this env, but status is not 401
-        assert resp.status_code != 401
+        response = broker_app.broker_health(x_broker_key="super-secret-key")
+        assert response.docker_available is False
 
 
 def test_broker_auth_disabled_dev_only():
