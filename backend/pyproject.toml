@@ -1,0 +1,111 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]
+
+[project]
+name = "sentinelx-backend"
+version = "0.1.0"
+description = "SENTINEL-X Backend API and Worker"
+requires-python = ">=3.11"
+dependencies = [
+    # Web framework
+    "fastapi>=0.104.0",
+    "uvicorn[standard]>=0.24.0",
+    "python-multipart>=0.0.6",
+
+    # Database
+    "sqlalchemy>=2.0.0",
+    "alembic>=1.12.0",
+    "psycopg2-binary>=2.9.0",
+
+    # Task queue
+    "celery[redis]>=5.3.0",
+    "redis>=5.0.0",
+
+    # Validation
+    "pydantic[email]>=2.4.0",
+    "pydantic-settings>=2.0.0",
+    "email-validator>=2.0.0",
+
+    # Auth
+    "PyJWT>=2.8.0",
+    "bcrypt>=4.0.0",
+    "cryptography>=41.0.0",
+
+    # HTTP client
+    "httpx>=0.25.0",
+    "aiohttp>=3.9.0",
+
+    # Graph analysis
+    "networkx>=3.2.0",
+
+    # PDF generation
+    "weasyprint>=60.0",
+    "jinja2>=3.1.0",
+
+    # GitHub
+    "PyGithub>=2.1.0",
+    "pynacl>=1.5.0",
+
+    # Utilities
+    "python-dotenv>=1.0.0",
+    "structlog>=23.2.0",
+    "tenacity>=8.2.0",
+    "python-dateutil>=2.8.2",
+    "aiofiles>=23.2.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-cov>=4.1.0",
+    "httpx>=0.25.0",
+    "factory-boy>=3.3.0",
+    "mypy>=1.6.0",
+    "ruff>=0.1.0",
+    "bandit>=1.7.0",
+    "black>=23.10.0",
+    "selenium>=4.15.0",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "S"]
+ignore = [
+    "E501",  # line length
+    "B008",  # do not perform function calls in argument defaults (FastAPI Depends)
+    "S101",  # assert used
+    "S603",  # subprocess call - check for execution of untrusted input
+    "S607",  # start process with a partial path
+    "S108",  # probable insecure usage of temp file/directory
+    "S110",  # try-except-pass
+    "S105",  # possible hardcoded password
+    "S106",  # possible hardcoded password assigned to argument (e.g. token_type="bearer")
+    "B904",  # raise from err
+]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]
+"migrations/*" = ["E501"]
+"tests/*" = ["S101", "S105", "S106", "S107", "S108", "F841", "E402"]
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true

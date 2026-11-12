@@ -1,0 +1,4 @@
+# INTENTIONALLY VULNERABLE DEPENDENCY FIXTURE FOR TESTING
+# requests 2.6.0 has known historical vulnerabilities (CVE-2015-2296, CVE-2018-18074, etc.)
+requests==2.6.0
+urllib3==1.25.8

@@ -1,0 +1,135 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+!frontend/src/lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+.venv/
+venv/
+ENV/
+
+# Environment variables - NEVER commit these
+.env
+.env.local
+.env.production
+.env.staging
+*.env
+
+# Node / Frontend
+node_modules/
+frontend/dist/
+frontend/build/
+frontend/.vite/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+.hypothesis/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+.docker/
+
+# Scanner outputs - raw artifacts (keep structured results in DB)
+/workspace/
+/tmp/
+scan_outputs/
+*.sarif.tmp
+
+# Logs
+logs/
+*.log
+
+# Reports (generated artifacts - not source controlled)
+reports/generated/
+
+# Secrets / keys - absolutely never commit
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa
+id_ed25519
+
+# Runtime Host generated certificate material and proxy token
+runtime_host/certs/ca/
+runtime_host/certs/server/
+runtime_host/certs/client/
+runtime_host/certs/crl/
+runtime_host/certs/proxy_token
+
+# Alembic
+backend/migrations/versions/__pycache__/
+
+# Assessment workspaces
+/assessment_workspaces/
+
+# Local binaries and pipx tools
+bin/
+.pipx/
+.semgrep-env/
+.uv/
+
+# Explicit local/test state exclusions
+**/__pycache__/
+**/.pytest_cache/
+*.pyc
+node_modules/
+dist/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+.env.*
+!.env.example
+.codex/
+**/.codex/
+test.log
+test-*.log
+pytest-*.log
+
+# Temporary remediation reports; official project documentation stays tracked.
+Stage_*_Report*.md
+!README.md
+!ARCHITECTURE.md
+!STAGE_3B_EXECUTION_GUIDE.md
+
