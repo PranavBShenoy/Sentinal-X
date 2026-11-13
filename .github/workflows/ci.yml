@@ -4,9 +4,11 @@ name: SENTINEL-X CI Pipeline
   push:
     branches:
       - main
+      - fix/security-hardening-audit
   pull_request:
     branches:
       - main
+      - fix/security-hardening-audit
 
 jobs:
   backend-test:
@@ -109,11 +111,13 @@ jobs:
       - name: Run Pytest Test Suite
         working-directory: ./backend
         env:
-          DATABASE_URL: sqlite:////tmp/sentinelx_ci_test.db
+          JWT_SECRET: ci-test-secret-key-for-validation-only-not-production
+          ENCRYPTION_KEY: U1RST05HX0ZFUk5FVF9LRVlfVEVTVF9PQUJDRDExMjI=
+          DATABASE_URL: "sqlite:///:memory:"
+          TESTING: "true"
         run: |
           PYTHONPATH=. python -m pytest tests/ -v \
-            --ignore=tests/integration/test_live_execution.py \
-            --ignore=tests/integration/test_docker_runtime_isolation.py
+            --ignore=tests/integration/test_live_execution.py
 
   frontend-build:
     name: Frontend Lint & Build
