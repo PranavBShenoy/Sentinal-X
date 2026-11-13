@@ -162,7 +162,6 @@ class Settings(BaseSettings):
     # - "remote": talk to a separate Runtime Execution Plane over mTLS +
     #   asymmetric job capability tokens. Requires RUNTIME_URL,
     #   RUNTIME_CLIENT_CERT, RUNTIME_CLIENT_KEY, RUNTIME_CA_CERT.
-    RUNTIME_MODE: str = "broker"
     # Runtime Execution Plane URL (used when RUNTIME_MODE=remote).
     RUNTIME_URL: str = "http://localhost:8001"
     # mTLS client certificate for authenticating to the Runtime Host.
@@ -171,6 +170,7 @@ class Settings(BaseSettings):
     RUNTIME_CLIENT_KEY: Optional[str] = None
     # CA certificate for verifying the Runtime Host's server certificate.
     RUNTIME_CA_CERT: Optional[str] = None
+    RUNTIME_MODE: str = "broker"
     # Ed25519 signer material is loaded only by the Control Plane authz provider.
     JOB_TOKEN_PRIVATE_KEY_PATH: Optional[str] = None
     JOB_TOKEN_PUBLIC_KEY_PATH: Optional[str] = None

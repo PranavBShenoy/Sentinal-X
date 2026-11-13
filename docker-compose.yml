@@ -71,9 +71,9 @@ services:
       - APP_ENV=${APP_ENV:-development}
       - ENVIRONMENT=${ENVIRONMENT:-${APP_ENV:-development}}
       - DATABASE_URL=postgresql://${POSTGRES_USER:-sentinelx}:${POSTGRES_PASSWORD:-sentinelx_dev_pass_change_in_prod}@postgres:5432/${POSTGRES_DB:-sentinelx}
-      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
-      - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://redis:6379/0}
-      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://redis:6379/1}
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
       - JWT_SECRET=${JWT_SECRET:-${JWT_SECRET_KEY:-sentinelx_jwt_secret_min_32_bytes_dev_only!}}
       - JWT_SECRET_KEY=${JWT_SECRET_KEY:-${JWT_SECRET:-sentinelx_jwt_secret_min_32_bytes_dev_only!}}
       - ASSESSMENT_WORKSPACE_BASE=${ASSESSMENT_WORKSPACE_BASE:-/var/lib/sentinelx/workspaces}
@@ -127,9 +127,9 @@ services:
       - APP_ENV=${APP_ENV:-development}
       - ENVIRONMENT=${ENVIRONMENT:-${APP_ENV:-development}}
       - DATABASE_URL=postgresql://${POSTGRES_USER:-sentinelx}:${POSTGRES_PASSWORD:-sentinelx_dev_pass_change_in_prod}@postgres:5432/${POSTGRES_DB:-sentinelx}
-      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
-      - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://redis:6379/0}
-      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://redis:6379/1}
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
       - JWT_SECRET=${JWT_SECRET:-${JWT_SECRET_KEY:-sentinelx_jwt_secret_min_32_bytes_dev_only!}}
       - JWT_SECRET_KEY=${JWT_SECRET_KEY:-${JWT_SECRET:-sentinelx_jwt_secret_min_32_bytes_dev_only!}}
       - ASSESSMENT_WORKSPACE_BASE=${ASSESSMENT_WORKSPACE_BASE:-/var/lib/sentinelx/workspaces}
