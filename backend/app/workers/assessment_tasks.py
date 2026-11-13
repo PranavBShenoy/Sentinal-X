@@ -16,10 +16,10 @@ Pipeline stages:
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from typing import Optional
 
 from celery.utils.log import get_task_logger
+from sqlalchemy import func
 
 from app.core.config import get_settings
 from app.core.database import db_session, SessionLocal
@@ -29,14 +29,10 @@ from app.models import (
     AssessmentStatus,
     AuthorizationRequest,
     Project,
-    ScanJob,
-    ScanJobStatus,
-    CheckStatus,
+    RuntimeStatus,
     User,
     Worker,
 )
-from app.runtime.docker.orchestrator import RuntimeOrchestrator
-from app.runtime.detection.detector import ProjectDetector, ProjectProfile
 
 settings = get_settings()
 logger = get_task_logger(__name__)
@@ -300,6 +296,9 @@ def provision_runtime(self, assessment_id: str, workspace_path: str, user_id: st
         # 3. Validate durable AuthorizationRequest — provenance boundary.
         #    Verifies user_id, assessment_id, tenant_id, operation, and status='approved'.
         #    Also retrieve the AuthorizationRequest's primary key for the Execution FK.
+        # Tenant identity comes from the project record, never a caller-supplied value.
+        tenant_id = str(project.owner_id)
+        operation = "provision"
         auth_request = (
             session.query(AuthorizationRequest)
             .filter(AuthorizationRequest.assessment_id == assessment_id)
@@ -319,7 +318,7 @@ def provision_runtime(self, assessment_id: str, workspace_path: str, user_id: st
         ar_id = str(auth_request.id)  # PK used as FK by Execution model
 
         # 4. Verify the worker belongs to the authorized identity
-        worker = _get_active_worker(session, user.id)
+        _get_active_worker(session, user.id)
 
         # 5. Atomically claim execution ownership.
         #    Try to insert a new Execution record bound to this
@@ -341,6 +340,7 @@ def provision_runtime(self, assessment_id: str, workspace_path: str, user_id: st
             )
             session.add(new_execution)
             session.flush()  # persist so we have the ID for the AR update
+            existing_execution = new_execution
         else:
             # An execution already exists for this AuthorizationRequest.
             # Distinguish the cases.
@@ -401,7 +401,7 @@ def provision_runtime(self, assessment_id: str, workspace_path: str, user_id: st
             "target_url": provision_result.get("target_url"),
             "status": provision_result.get("status"),
         }
-        if provision_result.get("status") in (RuntimeStatus.RUNNING.value, RuntimeStatus.RUNNING_SHORT.value if hasattr(RuntimeStatus, 'RUNNING_SHORT') else "running"):
+        if provision_result.get("status") in (RuntimeStatus.RUNNING.value, "running"):
             existing_execution.status = ExecutionStatus.COMPLETED
         else:
             existing_execution.status = ExecutionStatus.FAILED
