@@ -101,7 +101,6 @@ class RuntimeOrchestrator:
 
         authorization_context = None
         if request_id:
-            from sqlalchemy import select
             from app.models import AuthorizationRequest
 
             with db_session() as session:

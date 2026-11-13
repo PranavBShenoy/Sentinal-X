@@ -200,16 +200,13 @@ def test_authorization_failure_never_issues_token(
 ):
     """Authorization failure must never result in a capability token being issued."""
     # Non-existent assessment - should raise ValueError, not issue token
-    try:
+    with pytest.raises(ValueError):
         component.issue_mutation_token(
             assessment_id="nonexistent",
             tenant_id=str(test_user.id),
             operation="build",
             worker_cert_subject="subject",
         )
-        assert False, "Expected ValueError to be raised"
-    except ValueError:
-        pass
 
     # After ValueError, no token should have been issued
     # (The design ensures ValueError is raised before sign_job_token is called)

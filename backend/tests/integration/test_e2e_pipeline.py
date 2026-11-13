@@ -1,7 +1,6 @@
 
 import pytest
 import os
-import uuid
 from pathlib import Path
 from app.models import (
     Project,
@@ -64,7 +63,7 @@ def test_end_to_end_pipeline_execution(client, test_user, db):
 
     # Atomically consume the AuthorizationRecord (simulating Celery task behavior)
     from sqlalchemy import text
-    from app.core.database import engine, SessionLocal
+    from app.core.database import SessionLocal
     session = SessionLocal()
     # Use SQLite-compatible datetime function
     result = session.execute(

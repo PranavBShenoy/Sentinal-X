@@ -101,8 +101,6 @@ def _default_ownership_verifier(
     # Verify Worker is active and not revoked, and belongs to the tenant.
     # The Worker model has user_id -> User -> Project -> Assessment ownership chain.
     # We check that the Worker's user_id matches the assessment's created_by_user.
-    from sqlalchemy import select
-
     worker = session.query(Worker).filter(
         Worker.user_id == assessment.created_by_id
     ).first()

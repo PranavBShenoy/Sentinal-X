@@ -47,7 +47,7 @@ if __name__ == "__main__":
     _validate_startup_config()
     uvicorn.run(
         app,
-        host="0.0.0.0",  # noqa: S104 — broker must listen on all interfaces so the worker container can reach it via the compose service name; host port is mapped to 127.0.0.1 only in docker-compose.
+        host="0.0.0.0",  # noqa: S104  # nosec B104 — container peers need the service address; Compose publishes this port on 127.0.0.1 only.
         port=8001,
         timeout_keep_alive=30,  # F-9: bounded keep-alive to slowloris
         limit_concurrency=50,   # F-9: bound concurrent connections
