@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Live Parking Dashboard - SmartPark Cloud</title>
+  <link rel="stylesheet" href="css/style.css">
+  <link rel="stylesheet" href="css/dashboard.css">
+  <link rel="stylesheet" href="css/responsive.css">
+  <link rel="stylesheet" href="css/product-ui.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+</head>
+<body>
+  <!-- Top Navigation -->
+  <header class="navbar">
+    <div class="nav-brand">
+      <div class="brand-icon">P</div>
+      <div class="brand-text">
+        <h1>SmartPark <span class="brand-badge">AWS Cloud</span></h1>
+      </div>
+    </div>
+
+    <ul class="nav-links">
+      <li><a href="index.html" class="nav-link">Home</a></li>
+      <li><a href="dashboard.html" class="nav-link active">Live Dashboard</a></li>
+      <li><a href="booking.html" class="nav-link">Book a Slot</a></li>
+      <li><a href="admin.html" class="nav-link">Admin Console</a></li>
+    </ul>
+
+    <div class="nav-actions">
+      <div class="cloud-status-pill">
+        <span class="pulse-dot"></span>
+        <span id="cloud-status-text">Cloud Sync Active</span>
+      </div>
+    </div>
+  </header>
+
+  <main class="app-container">
+    <!-- Page Header -->
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">Live Parking Facility Occupancy</h1>
+        <p class="page-subtitle">Real-time occupancy status streamed from AWS DynamoDB & Detection Nodes</p>
+      </div>
+
+      <div style="display: flex; gap: 0.75rem; align-items: center;">
+        <span style="font-size: 0.8rem; color: var(--text-muted);">Last Sync: <strong id="last-updated-text" style="color: #fff;">--</strong></span>
+        <button class="refresh-btn" id="manual-refresh-btn" title="Refresh Live Data">🔄</button>
+      </div>
+    </div>
+
+    <!-- KPI Summary Cards Grid -->
+    <div class="stats-grid">
+      <div class="card stat-card">
+        <div class="stat-label">
+          <span>Total Capacity</span>
+          <span>🏢</span>
+        </div>
+        <div class="stat-value" id="kpi-total">--</div>
+        <div class="stat-subtext">Registered parking bays</div>
+      </div>
+
+      <div class="card stat-card card-free">
+        <div class="stat-label">
+          <span>Available Free</span>
+          <span>🟢</span>
+        </div>
+        <div class="stat-value" id="kpi-free" style="color: var(--status-free);">--</div>
+        <div class="stat-subtext">Immediate booking available</div>
+      </div>
+
+      <div class="card stat-card card-occupied">
+        <div class="stat-label">
+          <span>Occupied</span>
+          <span>🔴</span>
+        </div>
+        <div class="stat-value" id="kpi-occupied" style="color: var(--status-occupied);">--</div>
+        <div class="stat-subtext">Vehicles parked physically</div>
+      </div>
+
+      <div class="card stat-card card-reserved">
+        <div class="stat-label">
+          <span>Reserved</span>
+          <span>🟡</span>
+        </div>
+        <div class="stat-value" id="kpi-reserved" style="color: var(--status-reserved);">--</div>
+        <div class="stat-subtext">Awaiting driver arrival</div>
+      </div>
+
+      <div class="card stat-card card-rate">
+        <div class="stat-label">
+          <span>Availability Rate</span>
+          <span>📊</span>
+        </div>
+        <div class="stat-value" id="kpi-percentage" style="color: var(--accent-blue);">--%</div>
+        <div class="stat-subtext" id="kpi-percentage-bar">Calculated from total bays</div>
+      </div>
+    </div>
+
+    <!-- Quick Booking CTA Banner -->
+    <div class="booking-cta-banner">
+      <div>
+        <h3 style="font-size: 1.15rem; margin-bottom: 0.25rem;">Looking for quick parking reservation?</h3>
+        <p style="font-size: 0.85rem; color: var(--text-muted);">Reserve an available slot ahead of time to guarantee your spot.</p>
+      </div>
+      <a href="booking.html" class="btn btn-primary">Book Now →</a>
+    </div>
+
+    <!-- Filter and Control Toolbar -->
+    <div class="control-bar">
+      <div class="filter-group">
+        <span style="font-size: 0.82rem; font-weight: 600; color: var(--text-muted); margin-right: 0.25rem;">FILTER:</span>
+        <button class="filter-btn active" data-filter="ALL">All Slots</button>
+        <button class="filter-btn" data-filter="FREE">Free Only (🟢)</button>
+        <button class="filter-btn" data-filter="OCCUPIED">Occupied (🔴)</button>
+        <button class="filter-btn" data-filter="RESERVED">Reserved (🟡)</button>
+      </div>
+
+      <div class="live-indicator">
+        <label style="display: flex; align-items: center; gap: 0.4rem; cursor: pointer;">
+          <input type="checkbox" id="auto-refresh-toggle" checked>
+          <span>Auto-Sync (3s)</span>
+        </label>
+        <span id="sync-countdown" style="font-family: monospace; color: var(--accent-blue);">(3)</span>
+      </div>
+    </div>
+
+    <!-- Parking Grid Container -->
+    <div id="parking-zones-container">
+      <!-- Dynamically generated parking zones and bays -->
+      <div style="text-align: center; padding: 3rem; color: var(--text-dim);">
+        <div class="pulse-dot" style="margin: 0 auto 1rem auto; width: 14px; height: 14px;"></div>
+        Fetching live slot telemetry from AWS DynamoDB...
+      </div>
+    </div>
+
+    <!-- Color Legend & Detection Source Info -->
+    <div class="legend-bar">
+      <span style="font-weight: 700; color: #fff;">Legend:</span>
+      <div class="legend-item">
+        <span class="legend-color-dot dot-free"></span>
+        <span>FREE (Available to book)</span>
+      </div>
+      <div class="legend-item">
+        <span class="legend-color-dot dot-occupied"></span>
+        <span>OCCUPIED (Vehicle present)</span>
+      </div>
+      <div class="legend-item">
+        <span class="legend-color-dot dot-reserved"></span>
+        <span>RESERVED (User reserved)</span>
+      </div>
+      <div class="legend-item">
+        <span class="legend-color-dot dot-unknown"></span>
+        <span>UNKNOWN (Sensor unverified)</span>
+      </div>
+    </div>
+  </main>
+
+  <!-- Slot Inspection / Quick Book Modal -->
+  <div class="modal-backdrop" id="slot-modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <div style="display: flex; align-items: center; gap: 0.75rem;">
+          <h3 id="modal-slot-id" style="font-size: 1.5rem;">Slot A01</h3>
+          <span id="modal-slot-badge" class="badge badge-free">FREE</span>
+        </div>
+        <button class="modal-close" onclick="closeSlotModal()">&times;</button>
+      </div>
+
+      <div style="margin-bottom: 1.5rem; line-height: 1.8; font-size: 0.9rem;">
+        <div style="display: flex; justify-content: space-between; border-bottom: 1px solid rgba(255, 255, 255, 0.05); padding: 0.4rem 0;">
+          <span style="color: var(--text-dim);">Zone / Facility:</span>
+          <strong id="modal-slot-area">Zone A</strong>
+        </div>
+        <div style="display: flex; justify-content: space-between; border-bottom: 1px solid rgba(255, 255, 255, 0.05); padding: 0.4rem 0;">
+          <span style="color: var(--text-dim);">Detection Source:</span>
+          <span class="badge badge-source" id="modal-slot-source">JSON</span>
+        </div>
+        <div style="display: flex; justify-content: space-between; border-bottom: 1px solid rgba(255, 255, 255, 0.05); padding: 0.4rem 0;">
+          <span style="color: var(--text-dim);">Detection Confidence:</span>
+          <strong id="modal-slot-confidence" style="color: var(--accent-cyan);">100%</strong>
+        </div>
+        <div style="display: flex; justify-content: space-between; padding: 0.4rem 0;">
+          <span style="color: var(--text-dim);">Last Verified:</span>
+          <span id="modal-slot-updated" style="color: var(--text-muted); font-size: 0.8rem;">--</span>
+        </div>
+      </div>
+
+      <div id="modal-action-container">
+        <!-- Rendered based on status -->
+      </div>
+    </div>
+  </div>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <p>Cloud-Based Smart Parking Management System • AWS DynamoDB, Node.js, Express & OpenCV</p>
+  </footer>
+
+  <script src="js/api.js"></script>
+  <script src="js/dashboard.js"></script>
+</body>
+</html>

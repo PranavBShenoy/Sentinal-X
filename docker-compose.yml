@@ -87,6 +87,10 @@ services:
       - BROKER_API_KEY=${BROKER_API_KEY:?BROKER_API_KEY must be set explicitly; no default}
       - BROKER_AUTH_REQUIRED=${BROKER_AUTH_REQUIRED:-true}
       - RUNTIME_MODE=remote
+      - RUNTIME_URL=https://runtime-host:8443
+      - RUNTIME_CLIENT_CERT=/etc/runtime_host/client/client.crt
+      - RUNTIME_CLIENT_KEY=/etc/runtime_host/client/client.key
+      - RUNTIME_CA_CERT=/etc/runtime_host/client/server_ca.crt
       - JOB_TOKEN_PRIVATE_KEY_PATH=/run/secrets/job_token_private_key
       - JOB_TOKEN_PUBLIC_KEY_PATH=/etc/runtime_host/public_key.pem
       - RUNTIME_HOST_AUDIENCE=${RUNTIME_HOST_AUDIENCE:-runtime-host}
@@ -102,6 +106,9 @@ services:
     volumes:
       - ./rules:/app/rules:ro
       - ./runtime_host/certs/public_key.pem:/etc/runtime_host/public_key.pem:ro
+      - ./runtime_host/certs/client/client.crt:/etc/runtime_host/client/client.crt:ro
+      - ./runtime_host/certs/client/client.key:/etc/runtime_host/client/client.key:ro
+      - ./runtime_host/certs/client/server_ca.crt:/etc/runtime_host/client/server_ca.crt:ro
       - workspace_data:/var/lib/sentinelx/workspaces
       - reports_data:/var/lib/sentinelx/reports
     networks:
@@ -135,6 +142,10 @@ services:
       - BROKER_API_KEY=${BROKER_API_KEY:?BROKER_API_KEY must be set explicitly; no default}
       - BROKER_AUTH_REQUIRED=${BROKER_AUTH_REQUIRED:-true}
       - RUNTIME_MODE=remote
+      - RUNTIME_URL=https://runtime-host:8443
+      - RUNTIME_CLIENT_CERT=/etc/runtime_host/client/client.crt
+      - RUNTIME_CLIENT_KEY=/etc/runtime_host/client/client.key
+      - RUNTIME_CA_CERT=/etc/runtime_host/client/server_ca.crt
       - JOB_TOKEN_PRIVATE_KEY_PATH=/run/secrets/job_token_private_key
       - JOB_TOKEN_PUBLIC_KEY_PATH=/etc/runtime_host/public_key.pem
       - RUNTIME_HOST_AUDIENCE=${RUNTIME_HOST_AUDIENCE:-runtime-host}
@@ -154,6 +165,9 @@ services:
       # (production, default mode).
       - ./rules:/app/rules:ro
       - ./runtime_host/certs/public_key.pem:/etc/runtime_host/public_key.pem:ro
+      - ./runtime_host/certs/client/client.crt:/etc/runtime_host/client/client.crt:ro
+      - ./runtime_host/certs/client/client.key:/etc/runtime_host/client/client.key:ro
+      - ./runtime_host/certs/client/server_ca.crt:/etc/runtime_host/client/server_ca.crt:ro
       - workspace_data:/var/lib/sentinelx/workspaces
       - reports_data:/var/lib/sentinelx/reports
     networks:
@@ -294,8 +308,10 @@ services:
       - no-new-privileges:true
     networks:
       # Control plane reaches only this mTLS proxy on the runtime network.
-      - sentinelx-runtime
-      - sentinelx-runtime-edge
+      sentinelx-runtime:
+        aliases:
+          - runtime-host
+      sentinelx-runtime-edge: {}
 
   frontend:
     build:

@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Admin & Analytics Console - SmartPark Cloud</title>
+  <link rel="stylesheet" href="css/style.css">
+  <link rel="stylesheet" href="css/dashboard.css">
+  <link rel="stylesheet" href="css/responsive.css">
+  <link rel="stylesheet" href="css/product-ui.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <!-- Chart.js for Cloud Analytics -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+  <!-- Top Navigation -->
+  <header class="navbar">
+    <div class="nav-brand">
+      <div class="brand-icon">P</div>
+      <div class="brand-text">
+        <h1>SmartPark <span class="brand-badge">AWS Cloud</span></h1>
+      </div>
+    </div>
+
+    <ul class="nav-links">
+      <li><a href="index.html" class="nav-link">Home</a></li>
+      <li><a href="dashboard.html" class="nav-link">Live Dashboard</a></li>
+      <li><a href="booking.html" class="nav-link">Book a Slot</a></li>
+      <li><a href="admin.html" class="nav-link active">Admin Console</a></li>
+    </ul>
+
+    <div class="nav-actions">
+      <div class="cloud-status-pill">
+        <span class="pulse-dot"></span>
+        <span id="admin-auth-status">Admin Authenticated</span>
+      </div>
+      <button class="btn btn-secondary btn-sm" onclick="configureAdminKey()" title="Configure Admin API Key">🔑 Key</button>
+    </div>
+  </header>
+
+  <main class="app-container">
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">Facility Administration & Cloud Analytics</h1>
+        <p class="page-subtitle">Configure parking capacity, trigger status overrides, and monitor multi-source detection</p>
+      </div>
+      <div style="display: flex; gap: 0.75rem;">
+        <button class="btn btn-primary" onclick="openAddSlotModal()">+ Add New Slot</button>
+        <button class="btn btn-secondary" onclick="loadAdminDashboard()">🔄 Refresh</button>
+      </div>
+    </div>
+
+    <!-- Admin KPI Summary Grid -->
+    <div class="stats-grid">
+      <div class="card stat-card">
+        <div class="stat-label"><span>Total Bays</span><span>🏢</span></div>
+        <div class="stat-value" id="admin-total-slots">--</div>
+        <div class="stat-subtext">Active bays in database</div>
+      </div>
+      <div class="card stat-card card-free">
+        <div class="stat-label"><span>Available</span><span>🟢</span></div>
+        <div class="stat-value" id="admin-free-slots" style="color: var(--status-free);">--</div>
+        <div class="stat-subtext">Currently unoccupied</div>
+      </div>
+      <div class="card stat-card card-occupied">
+        <div class="stat-label"><span>Occupied</span><span>🔴</span></div>
+        <div class="stat-value" id="admin-occupied-slots" style="color: var(--status-occupied);">--</div>
+        <div class="stat-subtext">Physical vehicle presence</div>
+      </div>
+      <div class="card stat-card card-reserved">
+        <div class="stat-label"><span>Total Bookings</span><span>🎟️</span></div>
+        <div class="stat-value" id="admin-total-bookings" style="color: var(--accent-cyan);">--</div>
+        <div class="stat-subtext" id="admin-active-bookings-subtext">-- Active</div>
+      </div>
+    </div>
+
+    <!-- Analytics Charts Row -->
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin-bottom: 2rem;">
+      <!-- Chart 1: Current Occupancy Breakdown -->
+      <div class="card">
+        <h3 style="font-size: 1.1rem; margin-bottom: 1rem; display: flex; align-items: center; gap: 0.5rem;">
+          <span>📊</span> Parking Occupancy Status Distribution
+        </h3>
+        <div style="height: 250px; position: relative;">
+          <canvas id="occupancyChart"></canvas>
+        </div>
+      </div>
+
+      <!-- Chart 2: Detection Sources Distribution -->
+      <div class="card">
+        <h3 style="font-size: 1.1rem; margin-bottom: 1rem; display: flex; align-items: center; gap: 0.5rem;">
+          <span>📡</span> Multi-Source Detection Distribution
+        </h3>
+        <div style="height: 250px; position: relative;">
+          <canvas id="sourceChart"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <!-- Slot Management Table -->
+    <div class="card" style="margin-bottom: 2rem;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.25rem; flex-wrap: wrap; gap: 0.5rem;">
+        <h3 style="font-size: 1.2rem; display: flex; align-items: center; gap: 0.5rem;">
+          <span>🅿️</span> Parking Slot Management & Manual Overrides
+        </h3>
+        <span style="font-size: 0.8rem; color: var(--text-dim);">Manual overrides are audited with source: <code>ADMIN</code></span>
+      </div>
+
+      <div style="overflow-x: auto;">
+        <table style="width: 100%; border-collapse: collapse; text-align: left; font-size: 0.88rem;">
+          <thead>
+            <tr style="border-bottom: 1px solid rgba(255, 255, 255, 0.1); color: var(--text-muted);">
+              <th style="padding: 0.75rem;">Slot ID</th>
+              <th style="padding: 0.75rem;">Area / Zone</th>
+              <th style="padding: 0.75rem;">Status</th>
+              <th style="padding: 0.75rem;">Source</th>
+              <th style="padding: 0.75rem;">Confidence</th>
+              <th style="padding: 0.75rem;">Last Verified</th>
+              <th style="padding: 0.75rem; text-align: right;">Actions</th>
+            </tr>
+          </thead>
+          <tbody id="admin-slots-table-body">
+            <tr><td colspan="7" style="padding: 2rem; text-align: center; color: var(--text-dim);">Loading slot records...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Detection Audit Log & Live Bookings Grid -->
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem;">
+      <!-- Recent Bookings Table -->
+      <div class="card">
+        <h3 style="font-size: 1.1rem; margin-bottom: 1rem; display: flex; align-items: center; gap: 0.5rem;">
+          <span>🎟️</span> Recent Customer Reservations
+        </h3>
+        <div style="overflow-x: auto; max-height: 340px; overflow-y: auto;">
+          <table style="width: 100%; border-collapse: collapse; font-size: 0.82rem;">
+            <thead>
+              <tr style="border-bottom: 1px solid rgba(255, 255, 255, 0.08); color: var(--text-dim);">
+                <th style="padding: 0.5rem;">Slot</th>
+                <th style="padding: 0.5rem;">User</th>
+                <th style="padding: 0.5rem;">Vehicle</th>
+                <th style="padding: 0.5rem;">Status</th>
+              </tr>
+            </thead>
+            <tbody id="admin-bookings-table-body">
+              <tr><td colspan="4" style="padding: 1.5rem; text-align: center; color: var(--text-dim);">Loading bookings...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Detection Event History Table -->
+      <div class="card">
+        <h3 style="font-size: 1.1rem; margin-bottom: 1rem; display: flex; align-items: center; gap: 0.5rem;">
+          <span>📜</span> Detection Event Audit Log
+        </h3>
+        <div style="overflow-x: auto; max-height: 340px; overflow-y: auto;">
+          <table style="width: 100%; border-collapse: collapse; font-size: 0.82rem;">
+            <thead>
+              <tr style="border-bottom: 1px solid rgba(255, 255, 255, 0.08); color: var(--text-dim);">
+                <th style="padding: 0.5rem;">Slot</th>
+                <th style="padding: 0.5rem;">Transition</th>
+                <th style="padding: 0.5rem;">Source</th>
+                <th style="padding: 0.5rem;">Timestamp</th>
+              </tr>
+            </thead>
+            <tbody id="admin-history-table-body">
+              <tr><td colspan="4" style="padding: 1.5rem; text-align: center; color: var(--text-dim);">Loading audit events...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- Add Slot Modal -->
+  <div class="modal-backdrop" id="add-slot-modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>Add New Parking Slot</h3>
+        <button class="modal-close" onclick="closeAddSlotModal()">&times;</button>
+      </div>
+      <form id="add-slot-form">
+        <div class="form-group">
+          <label class="form-label" for="new-slot-id">Slot ID (e.g. C01, B07) *</label>
+          <input type="text" id="new-slot-id" class="form-control" placeholder="A07" required>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="new-slot-area">Parking Zone / Facility *</label>
+          <input type="text" id="new-slot-area" class="form-control" placeholder="Zone A - Ground Level" required>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="new-slot-status">Initial Status</label>
+          <select id="new-slot-status" class="form-control">
+            <option value="FREE" selected>FREE</option>
+            <option value="OCCUPIED">OCCUPIED</option>
+            <option value="RESERVED">RESERVED</option>
+            <option value="UNKNOWN">UNKNOWN</option>
+          </select>
+        </div>
+        <button type="submit" class="btn btn-primary" style="width: 100%;">Create Parking Slot</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- Manual Status Override Modal -->
+  <div class="modal-backdrop" id="override-modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>Override Slot Status</h3>
+        <button class="modal-close" onclick="closeOverrideModal()">&times;</button>
+      </div>
+      <form id="override-form">
+        <input type="hidden" id="override-slot-id">
+        <div class="form-group">
+          <label class="form-label">Target Slot</label>
+          <div style="font-size: 1.25rem; font-weight: 700; color: #fff;" id="override-slot-label">Slot A01</div>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="override-status-select">Select New Status *</label>
+          <select id="override-status-select" class="form-control" required>
+            <option value="FREE">FREE (🟢 Available)</option>
+            <option value="OCCUPIED">OCCUPIED (🔴 Vehicle Present)</option>
+            <option value="RESERVED">RESERVED (🟡 Reserved)</option>
+            <option value="UNKNOWN">UNKNOWN (⚪ Sensor Unverified)</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="override-note">Admin Reason / Note</label>
+          <input type="text" id="override-note" class="form-control" placeholder="e.g. Maintenance inspection or physical sensor calibration">
+        </div>
+        <button type="submit" class="btn btn-primary" style="width: 100%;">Apply Admin Override</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <p>Cloud-Based Smart Parking Management System • AWS DynamoDB, Node.js, Express & OpenCV</p>
+  </footer>
+
+  <script src="js/api.js"></script>
+  <script src="js/admin.js"></script>
+</body>
+</html>

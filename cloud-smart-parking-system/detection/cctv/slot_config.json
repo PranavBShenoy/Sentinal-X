@@ -1,0 +1,65 @@
+{
+  "cameraFeed": "CCTV-Sector-4-Cam-01",
+  "facility": "Central Tech Park",
+  "resolution": {
+    "width": 800,
+    "height": 600
+  },
+  "detectionParams": {
+    "occupancyThreshold": 0.28,
+    "gaussianBlurKernel": [5, 5],
+    "adaptiveThresholdBlockSize": 19,
+    "adaptiveThresholdC": 3,
+    "reportIntervalFrames": 15
+  },
+  "parkingSlots": [
+    {
+      "slotId": "A01",
+      "parkingArea": "Zone A - Ground Level",
+      "x": 60,
+      "y": 140,
+      "width": 100,
+      "height": 180
+    },
+    {
+      "slotId": "A02",
+      "parkingArea": "Zone A - Ground Level",
+      "x": 180,
+      "y": 140,
+      "width": 100,
+      "height": 180
+    },
+    {
+      "slotId": "A03",
+      "parkingArea": "Zone A - Ground Level",
+      "x": 300,
+      "y": 140,
+      "width": 100,
+      "height": 180
+    },
+    {
+      "slotId": "A04",
+      "parkingArea": "Zone A - Ground Level",
+      "x": 420,
+      "y": 140,
+      "width": 100,
+      "height": 180
+    },
+    {
+      "slotId": "B01",
+      "parkingArea": "Zone B - Level 1",
+      "x": 540,
+      "y": 140,
+      "width": 100,
+      "height": 180
+    },
+    {
+      "slotId": "B02",
+      "parkingArea": "Zone B - Level 1",
+      "x": 660,
+      "y": 140,
+      "width": 100,
+      "height": 180
+    }
+  ]
+}
