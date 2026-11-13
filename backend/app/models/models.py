@@ -761,7 +761,7 @@ class Execution(Base):
 
     id = Column(UUIDType, primary_key=True, default=new_uuid)
     authorization_request_id = Column(
-        String(36),
+        UUIDType,
         ForeignKey("authorization_requests.id", ondelete="CASCADE"),
         nullable=False,
         unique=True,

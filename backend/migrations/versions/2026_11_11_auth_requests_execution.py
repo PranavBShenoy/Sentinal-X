@@ -18,12 +18,55 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
+    uuid_type = sa.String(length=36).with_variant(
+        sa.UUID(as_uuid=False), 'postgresql'
+    )
+
+    # Authorization requests are the durable provenance record consumed by
+    # the control plane and referenced by each execution.
+    op.create_table(
+        'authorization_requests',
+        sa.Column('id', uuid_type, nullable=False),
+        sa.Column('user_id', uuid_type, nullable=False),
+        sa.Column('assessment_id', uuid_type, nullable=False),
+        sa.Column('tenant_id', uuid_type, nullable=False),
+        sa.Column('operation', sa.String(length=20), nullable=False),
+        sa.Column('request_id', sa.String(length=64), nullable=False),
+        sa.Column('status', sa.String(length=20), nullable=True),
+        sa.Column('created_at', sa.DateTime(timezone=True), nullable=True),
+        sa.Column('consumed_at', sa.DateTime(timezone=True), nullable=True),
+        sa.ForeignKeyConstraint(
+            ['user_id'], ['users.id'], ondelete='CASCADE'
+        ),
+        sa.ForeignKeyConstraint(
+            ['assessment_id'], ['assessments.id'], ondelete='CASCADE'
+        ),
+        sa.PrimaryKeyConstraint('id'),
+        sa.UniqueConstraint('request_id'),
+    )
+    op.create_index(
+        'ix_auth_requests_user_id', 'authorization_requests', ['user_id']
+    )
+    op.create_index(
+        'ix_auth_requests_assessment_id',
+        'authorization_requests',
+        ['assessment_id'],
+    )
+    op.create_index(
+        'ix_auth_requests_request_id',
+        'authorization_requests',
+        ['request_id'],
+    )
+    op.create_index(
+        'ix_auth_requests_status', 'authorization_requests', ['status']
+    )
+
     # Add execution_id column to authorization_requests
     op.add_column(
         'authorization_requests',
         sa.Column(
             'execution_id',
-            sa.String(length=36),
+            uuid_type,
             nullable=True,
         ),
     )
@@ -33,14 +76,12 @@ def upgrade() -> None:
         'executions',
         sa.Column(
             'id',
-            sa.String(length=36).with_variant(
-                sa.UUID(as_uuid=False), 'postgresql'
-            ),
+            uuid_type,
             nullable=False,
         ),
         sa.Column(
             'authorization_request_id',
-            sa.String(length=36),
+            uuid_type,
             nullable=False,
         ),
         sa.Column('status', sa.String(20), nullable=False, default='pending'),
@@ -83,3 +124,9 @@ def downgrade() -> None:
 
     # Remove execution_id column
     op.drop_column('authorization_requests', 'execution_id')
+
+    op.drop_index('ix_auth_requests_status', table_name='authorization_requests')
+    op.drop_index('ix_auth_requests_request_id', table_name='authorization_requests')
+    op.drop_index('ix_auth_requests_assessment_id', table_name='authorization_requests')
+    op.drop_index('ix_auth_requests_user_id', table_name='authorization_requests')
+    op.drop_table('authorization_requests')
