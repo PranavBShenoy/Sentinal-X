@@ -3,7 +3,7 @@
 > **Enterprise-Grade Application Security & DevSecOps Microservices Platform**
 
 [![CI/CD Pipeline](https://github.com/PranavBShenoy/Sentinal-X/actions/workflows/deploy.yml/badge.svg)](https://github.com/PranavBShenoy/Sentinal-X/actions/workflows/deploy.yml)
-[![Tests Passing](https://img.shields.io/badge/tests-279%20passed-success?logo=pytest)](https://github.com/PranavBShenoy/Sentinal-X)
+[![Tests Passing](https://img.shields.io/badge/tests-289%20passed-success?logo=pytest)](https://github.com/PranavBShenoy/Sentinal-X)
 [![Code Quality](https://img.shields.io/badge/linter-ruff%20clean-blue?logo=python)](https://github.com/astral-sh/ruff)
 [![Security Scanned](https://img.shields.io/badge/security-bandit%20clean-brightgreen?logo=shield)](https://github.com/PyCQA/bandit)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -94,7 +94,9 @@ Sentinel-X integrates industry-standard security scanners into a correlated, nor
 | **SBOM Generation** | [Syft](https://github.com/anchore/syft) | Deep container and repository software bill of materials cataloging (CycloneDX and SPDX formats). |
 | **Vulnerability Scanning** | [Grype](https://github.com/anchore/grype), [Trivy](https://github.com/aquasecurity/trivy), [OSV](https://osv.dev/) | Multi-engine CVE correlation across package manifests (npm, pip, maven, cargo, go) with CVSS v3.1 scoring. |
 | **Active DAST** | [OWASP ZAP](https://www.zaproxy.org/) | Automated passive and active dynamic application security testing against deployed web endpoints. |
-| **AI Remediation** | [OpenRouter](https://openrouter.ai/) / Claude / GPT-4 | Human-reviewed automated patch and PR generation addressing high-confidence vulnerabilities. |
+| **Evidence & Snippets** | AST & Scanner Telemetry | Zero-trust sanitized vulnerable code snippets (`code_snippet`), scanner diagnostics, CWE/OWASP metadata taxonomy, and HTTP response header audits (`raw_evidence`). |
+| **Security Triage** | Granular Disposition Engine | Human triage tracking (`OPEN`, `CONFIRMED`, `FALSE_POSITIVE`, `ACCEPTED_RISK`, `FIXED`, `SUPPRESSED`) with suppression audit logging and status alias normalization. |
+| **AI Remediation** | [OpenRouter](https://openrouter.ai/) / Claude / GPT-4 | Human-in-the-loop (HITL) automated patch diffs and step-by-step security guidance isolated per finding. |
 
 ---
 
@@ -171,7 +173,7 @@ docker compose exec -T api python -m alembic upgrade head
 Sentinel-X maintains a strict zero-regression quality standard:
 
 ```bash
-# Run backend unit test suite (279 passing tests)
+# Run backend unit test suite (289 passing tests)
 cd backend
 PYTHONPATH=. python3 -m pytest tests/unit/ -v
 
