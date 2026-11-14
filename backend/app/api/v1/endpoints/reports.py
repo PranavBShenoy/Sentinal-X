@@ -5,55 +5,20 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import List, Optional
+from typing import List
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import get_assessment_or_404, get_current_user
 from app.core.database import get_db
-from app.core.security import decode_access_token
 from app.models import Assessment, Project, Report, User
 from app.reporting.generator import ReportGenerator
 from app.schemas import ReportGenerateRequest, ReportResponse
 
 router = APIRouter(tags=["reports"])
-
-
-def get_download_user(
-    request: Request,
-    token: Optional[str] = Query(None, description="Optional access token for direct browser downloads"),
-    db: Session = Depends(get_db),
-) -> User:
-    """Authenticate user via Authorization header or ?token= query parameter."""
-    auth_header = request.headers.get("Authorization")
-    raw_token: Optional[str] = None
-    if auth_header and auth_header.startswith("Bearer "):
-        raw_token = auth_header[7:].strip()
-    elif token:
-        raw_token = token.strip()
-
-    if not raw_token:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Authentication required to download report.",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    try:
-        payload = decode_access_token(raw_token)
-        user_id = payload.get("sub")
-        if not user_id:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token subject.")
-    except Exception:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token.")
-
-    user = db.query(User).filter(User.id == user_id).first()
-    if not user or not user.is_active:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found or inactive.")
-    return user
 
 
 def get_report_or_404(
@@ -116,7 +81,7 @@ def list_reports(
 @router.get("/reports/{report_id}/download")
 def download_report(
     report_id: UUID,
-    user: User = Depends(get_download_user),
+    user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> FileResponse:
     """Download a generated report file."""

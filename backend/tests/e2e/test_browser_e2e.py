@@ -15,6 +15,7 @@ Uses headless Chromium and Selenium to verify the entire platform workflow:
 """
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import socket
@@ -64,42 +65,16 @@ if not is_frontend_built():
 
 
 
-def is_port_in_use(port: int) -> bool:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        return s.connect_ex(("127.0.0.1", port)) == 0
-
-
-def _free_port(port: int) -> None:
-    """Kill any process already listening on *port* so the E2E servers can bind cleanly.
-
-    Uses ``fuser -k`` (SIGKILL) as the primary mechanism and falls back to
-    ``lsof`` + ``kill``. This is a test-only helper used to clear leftover
-    processes from previous runs; it never touches production services.
-    """
-    try:
-        subprocess.run(
-            ["fuser", "-k", f"{port}/tcp"],
-            capture_output=True,
-            timeout=5,
-        )
-    except Exception:
-        try:
-            result = subprocess.run(
-                ["lsof", "-ti", f":{port}"],
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            pids = [p for p in result.stdout.split() if p.strip()]
-            for pid in pids:
-                subprocess.run(["kill", "-9", pid], capture_output=True, timeout=5)
-        except Exception:
-            pass
+def _get_free_port() -> int:
+    """Reserve an ephemeral localhost port number without touching other apps."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
 
 
 @pytest.fixture(scope="module")
 def e2e_environment() -> Generator[dict, None, None]:
-    """Sets up FastAPI backend on port 8000 and Vite preview frontend on port 3000."""
+    """Start isolated local API and frontend processes on available ports."""
     if not is_browser_available():
         pytest.skip("Chromium or chromedriver is not available in this environment")
 
@@ -115,9 +90,8 @@ def e2e_environment() -> Generator[dict, None, None]:
         except OSError:
             pass
 
-    # Free ports from any previous run so the E2E servers can bind cleanly.
-    _free_port(8000)
-    _free_port(3000)
+    api_port = _get_free_port()
+    frontend_port = _get_free_port()
 
     # Run database migration
     env = dict(os.environ)
@@ -125,6 +99,10 @@ def e2e_environment() -> Generator[dict, None, None]:
     env["CELERY_TASK_ALWAYS_EAGER"] = "true"
     env["RATE_LIMIT_ENABLED"] = "false"
     env["ASSESSMENT_WORKSPACE_BASE"] = "/tmp/sentinelx_workspaces"
+    env["APP_ENV"] = "development"
+    env["TESTING"] = "true"
+    env["OPENROUTER_API_KEY"] = ""
+    env["API_PROXY_TARGET"] = f"http://127.0.0.1:{api_port}"
 
     subprocess.run(
         ["python3", "-m", "alembic", "upgrade", "head"],
@@ -137,21 +115,21 @@ def e2e_environment() -> Generator[dict, None, None]:
     api_log = open("/tmp/e2e_api.log", "w")
     vite_log = open("/tmp/e2e_vite.log", "w")
 
-    # Start FastAPI backend on 8000
+    # Start FastAPI backend on its allocated test port.
     api_proc = subprocess.Popen(
-        ["python3", "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "8000"],
+        ["python3", "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", str(api_port)],
         cwd=str(backend_dir),
         env=env,
         stdout=api_log,
         stderr=api_log,
     )
 
-    # Start Vite preview on 3000 (use local binary; npx may resolve to a
-    # different binary that fails to serve the built dist/ directory).
+    # Start Vite preview on its allocated port (use the local binary).
     vite_bin = frontend_dir / "node_modules" / ".bin" / "vite"
     vite_proc = subprocess.Popen(
-        [str(vite_bin), "preview", "--port", "3000", "--host", "127.0.0.1"],
+        [str(vite_bin), "preview", "--port", str(frontend_port), "--host", "127.0.0.1"],
         cwd=str(frontend_dir),
+        env=env,
         stdout=vite_log,
         stderr=vite_log,
     )
@@ -162,14 +140,14 @@ def e2e_environment() -> Generator[dict, None, None]:
     for _ in range(30):
         if not api_ready:
             try:
-                with urllib.request.urlopen("http://127.0.0.1:8000/api/v1/health", timeout=1) as resp:
+                with urllib.request.urlopen(f"http://127.0.0.1:{api_port}/api/v1/health", timeout=1) as resp:
                     if resp.status == 200:
                         api_ready = True
             except Exception:
                 pass
         if not frontend_ready:
             try:
-                with urllib.request.urlopen("http://127.0.0.1:3000/", timeout=1) as resp:
+                with urllib.request.urlopen(f"http://127.0.0.1:{frontend_port}/", timeout=1) as resp:
                     if resp.status == 200:
                         frontend_ready = True
             except Exception:
@@ -178,12 +156,12 @@ def e2e_environment() -> Generator[dict, None, None]:
             break
         time.sleep(0.5)
 
-    assert api_ready, "FastAPI backend failed to start on port 8000"
-    assert frontend_ready, "Vite frontend failed to start on port 3000"
+    assert api_ready, f"FastAPI backend failed to start on port {api_port}"
+    assert frontend_ready, f"Vite frontend failed to start on port {frontend_port}"
 
     yield {
-        "base_url": "http://127.0.0.1:3000",
-        "api_url": "http://127.0.0.1:8000",
+        "base_url": f"http://127.0.0.1:{frontend_port}",
+        "api_url": f"http://127.0.0.1:{api_port}",
         "workspace_root": workspace_root,
         "db_path": test_db_path,
     }
@@ -243,7 +221,7 @@ def test_full_browser_e2e_platform_lifecycle(browser: webdriver.Chrome, e2e_envi
     fixture_dir = workspace_root / "tests" / "fixtures" / "vuln_sqli"
     assert fixture_dir.exists(), f"Vulnerable fixture missing: {fixture_dir}"
 
-    wait = WebDriverWait(browser, 15)
+    wait = WebDriverWait(browser, 180)
 
     # =========================================================================
     # Step 1: User Registration
@@ -252,7 +230,7 @@ def test_full_browser_e2e_platform_lifecycle(browser: webdriver.Chrome, e2e_envi
     wait.until(EC.presence_of_element_located((By.TAG_NAME, "h1")))
     assert "Create an Account" in browser.page_source
 
-    name_input = browser.find_element(By.CSS_SELECTOR, "input[placeholder='Jane Doe']")
+    name_input = browser.find_element(By.CSS_SELECTOR, "input[placeholder='analyst_user']")
     email_input = browser.find_element(By.CSS_SELECTOR, "input[type='email']")
     password_input = browser.find_element(By.CSS_SELECTOR, "input[type='password']")
     submit_btn = browser.find_element(By.CSS_SELECTOR, "button[type='submit']")
@@ -260,7 +238,7 @@ def test_full_browser_e2e_platform_lifecycle(browser: webdriver.Chrome, e2e_envi
     test_email = "auditor@sentinelx.security"
     test_pass = "P@ssw0rd123!AuditSecure"
 
-    name_input.send_keys("Lead Security Auditor")
+    name_input.send_keys("lead_security_auditor")
     email_input.send_keys(test_email)
     password_input.send_keys(test_pass)
     submit_btn.click()
@@ -307,7 +285,7 @@ def test_full_browser_e2e_platform_lifecycle(browser: webdriver.Chrome, e2e_envi
     # Fill in modal fields
     proj_name_input = wait.until(EC.visibility_of_element_located((By.CSS_SELECTOR, "input[placeholder='e.g. Sentinel Core API']")))
     proj_desc_input = browser.find_element(By.CSS_SELECTOR, "textarea[placeholder='Production microservice handling customer payments...']")
-    clone_url_input = browser.find_element(By.CSS_SELECTOR, "input[placeholder='https://github.com/org/repo.git or /path/to/repo']")
+    clone_url_input = browser.find_element(By.CSS_SELECTOR, "input[placeholder='https://github.com/org/repo.git']")
 
     proj_name_input.send_keys("E2E SQLi Fixture Project")
     proj_desc_input.send_keys("Automated Browser E2E Target for Static & Dependency Testing")
@@ -327,6 +305,15 @@ def test_full_browser_e2e_platform_lifecycle(browser: webdriver.Chrome, e2e_envi
     browser.get(f"{base_url}/assessments/new")
     wait.until(EC.presence_of_element_located((By.XPATH, "//*[contains(text(), 'Launch Security Assessment')]")))
 
+    # Keep this browser journey code-analysis only. The test fixture is local;
+    # no target website is probed and no repository Dockerfile is executed.
+    checkboxes = browser.find_elements(By.CSS_SELECTOR, "input[type='checkbox']")
+    assert len(checkboxes) == 6, "Assessment module controls changed unexpectedly"
+    checkboxes[2].click()  # SBOM
+    checkboxes[3].click()  # dependency analysis
+    checkboxes[4].click()  # isolated runtime
+    checkboxes[5].click()  # active DAST
+
     # Wait for project/repository options to populate and button to become clickable
     launch_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(., 'Execute Assessment Pipeline')]")))
     launch_btn.click()
@@ -336,13 +323,36 @@ def test_full_browser_e2e_platform_lifecycle(browser: webdriver.Chrome, e2e_envi
     assessment_id = browser.current_url.split("/assessments/")[1].split("/")[0].split("?")[0]
     assert len(assessment_id) > 10, f"Invalid assessment ID in URL: {browser.current_url}"
 
-    # Wait for assessment pipeline to complete (eager execution or background polling)
-    wait.until(
-        EC.presence_of_element_located((
-            By.XPATH,
-            "//*[contains(text(), 'Branch:') or contains(text(), 'Completed') or contains(text(), 'Partial Coverage') or contains(text(), 'Scan Jobs')]"
-        ))
+    # The test API is configured for eager Celery execution. Require a terminal
+    # state instead of accepting static page headings while the scan is queued.
+    api_url = e2e_environment["api_url"]
+    token = browser.execute_script("return localStorage.getItem('sentinelx_access_token');")
+
+    def assessment_status():
+        request = urllib.request.Request(  # noqa: S310
+            f"{api_url}/api/v1/assessments/{assessment_id}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        with urllib.request.urlopen(request, timeout=2) as response:  # noqa: S310
+            return json.loads(response.read()).get("status")
+
+    terminal_status = None
+    for _ in range(90):
+        terminal_status = assessment_status()
+        if terminal_status in {"COMPLETED", "PARTIAL", "FAILED", "CANCELLED"}:
+            break
+        time.sleep(1)
+    assert terminal_status in {"COMPLETED", "PARTIAL"}, f"Assessment did not complete: {terminal_status}"
+
+    jobs_request = urllib.request.Request(  # noqa: S310
+        f"{api_url}/api/v1/assessments/{assessment_id}/jobs",
+        headers={"Authorization": f"Bearer {token}"},
     )
+    with urllib.request.urlopen(jobs_request, timeout=2) as response:  # noqa: S310
+        scan_jobs = json.loads(response.read())
+    by_tool = {job["tool_name"]: job for job in scan_jobs}
+    assert by_tool.get("runtime", {}).get("status") == "SKIPPED"
+    assert by_tool.get("dast_zap", {}).get("status") == "SKIPPED"
 
     # Verify scan jobs or telemetry cards rendered
     assert "Semgrep" in browser.page_source or "Jobs" in browser.page_source or "Scan" in browser.page_source
@@ -412,18 +422,28 @@ def test_full_browser_e2e_platform_lifecycle(browser: webdriver.Chrome, e2e_envi
     generate_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(., 'Generate Report')]")))
     generate_btn.click()
 
-    # Wait for report entry in Available Downloads
-    wait.until(EC.presence_of_element_located((By.XPATH, "//a[contains(., 'Download File')]")))
-    download_link = browser.find_element(By.XPATH, "//a[contains(., 'Download File')]")
-    download_url = download_link.get_attribute("href")
-    assert download_url is not None and "/reports/" in download_url, f"Invalid download link: {download_url}"
-    assert "token=" in download_url, "Download link must include authenticated token query parameter"
+    # Download uses the Authorization header; bearer credentials must not be in URLs.
+    wait.until(EC.presence_of_element_located((By.XPATH, "//button[contains(., 'Download File')]")))
+    # The UI intentionally does not expose report URLs; obtain an ID through
+    # the authenticated API after React has finished refreshing its report list.
+    report_id = browser.execute_async_script(
+        """const done = arguments[arguments.length - 1];
+        const token = localStorage.getItem('sentinelx_access_token');
+        fetch(`/api/v1/assessments/${arguments[0]}/reports`, {headers:{Authorization:`Bearer ${token}`}})
+          .then(r => r.json()).then(items => done(items[0]?.id || null)).catch(() => done(null));""",
+        assessment_id,
+    )
+    assert report_id, "Generated report is missing an ID"
+    download_button = browser.find_element(By.XPATH, "//button[contains(., 'Download File')]")
+    download_button.click()
+    data = browser.execute_async_script(
+        """const done = arguments[arguments.length - 1];
+        const token = localStorage.getItem('sentinelx_access_token');
+        fetch(`/api/v1/reports/${arguments[0]}/download`, {headers:{Authorization:`Bearer ${token}`}})
+          .then(async r => done({status:r.status, bytes:(await r.arrayBuffer()).byteLength}))
+          .catch(() => done({status:0, bytes:0}));""",
+        report_id,
+    )
+    assert data["status"] == 200 and data["bytes"] > 0, "Authenticated report download failed"
 
-    # Verify direct download returns 200 and non-empty content
-    req = urllib.request.Request(download_url)  # noqa: S310
-    with urllib.request.urlopen(req) as resp:  # noqa: S310
-        assert resp.status == 200, f"Download failed with status {resp.status}"
-        data = resp.read()
-        assert len(data) > 0, "Downloaded report file is empty"
-
-    print(f"\n[Browser E2E] Successfully verified complete workflow. Downloaded report size: {len(data)} bytes.")
+    print(f"\n[Browser E2E] Successfully verified complete workflow. Downloaded report size: {data['bytes']} bytes.")

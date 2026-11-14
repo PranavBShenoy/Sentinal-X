@@ -1,0 +1,78 @@
+# ==============================================================================
+# SENTINEL-X Subdomain Reverse-Proxy Configuration for Caddy
+# ==============================================================================
+# This configuration runs alongside existing services (e.g. SmartPark)
+# without port conflicts or downtime.
+#
+# Usage:
+# 1. Replace 'sentinelx.yourdomain.com' with your actual DNS subdomain (pointing to 54.79.97.73).
+# 2. Append this block to /etc/caddy/Caddyfile, or add this line to /etc/caddy/Caddyfile:
+#    import /home/ubuntu/Sentinal-X/infrastructure/caddy/Caddyfile.snippet
+# 3. Reload Caddy gracefully:
+#    sudo caddy reload
+# ==============================================================================
+
+{$SENTINELX_DOMAIN:sentinelx.54.79.97.73.nip.io} {
+    # Automatic TLS certificate issuance & management via Let's Encrypt / ZeroSSL.
+    # Caddy automatically handles ACME HTTP-01/TLS-ALPN-01 challenges and 80 -> 443 redirects.
+    
+    # Enable robust compression (Zstandard & Gzip)
+    encode zstd gzip
+
+    # Enterprise security headers
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        X-XSS-Protection "1; mode=block"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        Permissions-Policy "camera=(), microphone=(), geolocation=()"
+    }
+
+    # Request size limits (prevent resource exhaustion)
+    request_body {
+        max_size 50MB
+    }
+
+    # 1. API Route Handling: Proxy directly to Sentinel-X FastAPI container
+    handle /api/* {
+        reverse_proxy 127.0.0.1:8000 {
+            header_up Host {host}
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+
+            # Response buffer tuning for streaming scanner reports
+            flush_interval -1
+            transport http {
+                response_header_timeout 300s
+                read_timeout 300s
+            }
+        }
+    }
+
+    # 2. Frontend SPA Dashboard: Proxy to Sentinel-X React/Nginx container
+    handle {
+        reverse_proxy 127.0.0.1:3000 {
+            header_up Host {host}
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+
+            # Support WebSocket upgrades for real-time dashboard progress
+            transport http {
+                response_header_timeout 60s
+            }
+        }
+    }
+
+    # Dedicated access and error logging for Sentinel-X
+    log {
+        output file /var/log/caddy/sentinelx_access.log {
+            roll_size 20mb
+            roll_keep 5
+            roll_keep_for 720h
+        }
+        format json
+    }
+}

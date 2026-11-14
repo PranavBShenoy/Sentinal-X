@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Finding, FindingStatus } from '../../types';
+import { Finding, FindingStatus, RemediationProposal } from '../../types';
 import { api } from '../../lib/api';
 import { SeverityBadge } from '../../components/SeverityBadge';
 import { RiskScoreMeter } from '../../components/RiskScoreMeter';
@@ -14,6 +14,13 @@ import {
   FileCode,
   ExternalLink,
 } from 'lucide-react';
+
+function hasReviewableDiff(diff: string | null | undefined): boolean {
+  if (!diff || /patch details depend|insecure code pattern flagged|apply recommended parameterization/i.test(diff)) {
+    return false;
+  }
+  return /^---\s/m.test(diff) && /^\+\+\+\s/m.test(diff) && /^@@/m.test(diff);
+}
 
 interface FindingDetailModalProps {
   finding: Finding | null;
@@ -33,7 +40,9 @@ export const FindingDetailModal: React.FC<FindingDetailModalProps> = ({
   const [notes, setNotes] = useState('');
   const [updating, setUpdating] = useState(false);
   const [generatingAi, setGeneratingAi] = useState(false);
-  const [aiProposal, setAiProposal] = useState<any | null>(null);
+  const [aiProposal, setAiProposal] = useState<RemediationProposal | null>(null);
+  const [remediationError, setRemediationError] = useState<string | null>(null);
+  const reviewableDiff = hasReviewableDiff(aiProposal?.patch_diff);
 
   const handleUpdateDisposition = async () => {
     setUpdating(true);
@@ -49,12 +58,13 @@ export const FindingDetailModal: React.FC<FindingDetailModalProps> = ({
 
   const handleGenerateAiFix = async () => {
     setGeneratingAi(true);
+    setRemediationError(null);
     try {
       const proposal = await api.generateRemediation(finding.id);
       setAiProposal(proposal);
       setActiveTab('ai');
     } catch (err: any) {
-      alert(err.message || 'Failed to generate AI remediation proposal');
+      setRemediationError(err.message || 'Failed to generate remediation proposal');
     } finally {
       setGeneratingAi(false);
     }
@@ -84,6 +94,7 @@ export const FindingDetailModal: React.FC<FindingDetailModalProps> = ({
                   {finding.line_start && `:${finding.line_start}`}
                 </span>
               </div>
+
             )}
           </div>
 
@@ -252,13 +263,37 @@ export const FindingDetailModal: React.FC<FindingDetailModalProps> = ({
                 </h4>
                 <button
                   onClick={handleGenerateAiFix}
-                  disabled={generatingAi}
+                  disabled={generatingAi || !!aiProposal}
                   className="px-3 py-1.5 bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 border border-emerald-500/30 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors"
                 >
                   <Wrench className="w-3.5 h-3.5" />
-                  {generatingAi ? 'Analyzing...' : 'Generate Fix Diff'}
+                  {generatingAi ? 'Analyzing...' : aiProposal ? 'Analysis Complete' : 'Generate AI Analysis'}
                 </button>
               </div>
+
+              {remediationError && (
+                <div className="p-3 rounded-lg border border-red-800 bg-red-950/30 text-xs text-red-300">
+                  {remediationError}
+                </div>
+              )}
+
+              {aiProposal?.generation_mode === 'deterministic' && (
+                <div className="p-3 rounded-lg border border-amber-700/60 bg-amber-950/20 text-xs text-amber-200">
+                  AI analysis is unavailable, so these are rule-based remediation steps. Check the
+                  server's AI provider configuration and try again later.
+                </div>
+              )}
+
+              {(aiProposal?.remediation_steps?.length || finding.ai_remediation) && (
+                <div className="p-4 rounded-xl bg-surface-elevated border border-border space-y-2">
+                  <div className="text-xs font-semibold text-emerald-400">Remediation Guidance</div>
+                  <ul className="list-disc pl-5 space-y-1 text-xs text-slate-200">
+                    {(aiProposal?.remediation_steps ?? finding.ai_remediation?.split('\n') ?? []).map((step, index) => (
+                      <li key={index}>{step}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
 
               {finding.ai_explanation ? (
                 <div className="p-4 rounded-xl bg-surface-elevated border border-border space-y-3">
@@ -269,16 +304,22 @@ export const FindingDetailModal: React.FC<FindingDetailModalProps> = ({
                 </div>
               ) : (
                 <div className="p-4 rounded-xl bg-surface-elevated/40 border border-border text-xs text-slate-400">
-                  Click 'Generate Fix Diff' to run automated LLM security analysis and synthesize a remediation patch.
+                  Request AI guidance here. A reviewable code diff appears only when relevant source context is available.
                 </div>
               )}
 
-              {(aiProposal?.diff || finding.ai_remediation) && (
+              {reviewableDiff && aiProposal?.patch_diff ? (
                 <div className="p-4 rounded-xl bg-[#090d16] border border-border space-y-2 font-mono text-xs">
-                  <div className="text-xs font-semibold text-slate-400 font-sans">Proposed Patch (Diff)</div>
+                  <div className="text-xs font-semibold text-slate-400 font-sans">Proposed Code Changes (Unified Diff)</div>
                   <pre className="overflow-x-auto text-emerald-300">
-                    {aiProposal?.diff || finding.ai_remediation}
+                    {aiProposal.patch_diff}
                   </pre>
+                </div>
+              ) : aiProposal && (
+                <div className="p-4 rounded-xl bg-surface-elevated/40 border border-border text-xs text-slate-400">
+                  {aiProposal.patch_diff
+                    ? 'The AI returned a remediation suggestion, not a unified code diff. It cannot be applied or approved as a patch.'
+                    : 'No reviewable source diff was produced for this finding. Review the guidance above; a code diff requires relevant source evidence.'}
                 </div>
               )}
             </div>

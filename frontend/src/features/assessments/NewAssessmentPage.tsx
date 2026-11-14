@@ -104,6 +104,25 @@ export const NewAssessmentPage: React.FC = () => {
       return;
     }
 
+    let normalizedTargetUrl: string | undefined;
+    const trimmedTargetUrl = targetUrl.trim();
+    if (trimmedTargetUrl) {
+      const candidate = /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmedTargetUrl)
+        ? trimmedTargetUrl
+        : `https://${trimmedTargetUrl}`;
+      try {
+        const parsed = new URL(candidate);
+        if (!['http:', 'https:'].includes(parsed.protocol) || !parsed.hostname) {
+          throw new Error('Invalid URL');
+        }
+        normalizedTargetUrl = parsed.toString();
+        setTargetUrl(normalizedTargetUrl);
+      } catch {
+        setError('Enter a valid HTTP or HTTPS target URL.');
+        return;
+      }
+    }
+
     setLaunching(true);
     setError(null);
 
@@ -114,7 +133,7 @@ export const NewAssessmentPage: React.FC = () => {
         branch: branch || 'main',
         commit_sha: commitSha || undefined,
         config: {
-          target_url: targetUrl || undefined,
+          target_url: normalizedTargetUrl,
           enable_sast: enableSast,
           enable_secrets: enableSecrets,
           enable_sbom: enableSbom,
@@ -247,15 +266,19 @@ export const NewAssessmentPage: React.FC = () => {
               Target Staging URL (Optional)
             </label>
             <input
-              type="url"
+              type="text"
+              inputMode="url"
               value={targetUrl}
               onChange={(e) => handleUrlChange(e.target.value)}
-              placeholder="https://staging.internal.example.com"
+              placeholder="https://staging.example.com"
               className="w-full px-3.5 py-2.5 bg-surface-elevated border border-border rounded-lg text-sm text-slate-100 font-mono text-xs focus:outline-none focus:border-emerald-500"
             />
             <p className="text-[11px] text-slate-400 mt-1">
               If left blank and isolated runtime is enabled, SENTINEL-X will provision an ephemeral
               sandboxed container from repository Dockerfiles or project detectors.
+            </p>
+            <p className="text-[11px] text-slate-500 mt-1">
+              A hostname without a scheme is treated as HTTPS.
             </p>
             {ssrfWarning && (
               <p className="text-xs text-amber-400 mt-2 flex items-center gap-1.5">

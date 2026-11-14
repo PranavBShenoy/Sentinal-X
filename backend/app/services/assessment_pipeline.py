@@ -51,6 +51,20 @@ logger = get_logger(__name__)
 settings = get_settings()
 
 
+def _assessment_scan_options(config: Any) -> Dict[str, bool]:
+    """Normalize persisted module selections, preserving old full-scan behavior."""
+    values = config if isinstance(config, dict) else {}
+    defaults = {
+        "enable_sast": True,
+        "enable_secrets": True,
+        "enable_sbom": True,
+        "enable_deps": True,
+        "enable_runtime": True,
+        "enable_active_dast": False,
+    }
+    return {key: values.get(key, default) is True for key, default in defaults.items()}
+
+
 class AssessmentPipeline:
     """Coordinates all scanner stages, correlation, scoring, and reports."""
 
@@ -80,6 +94,11 @@ class AssessmentPipeline:
         target_url: Optional[str] = None
 
         try:
+            with db_session() as db:
+                assessment = db.query(Assessment).filter(Assessment.id == self.assessment_id).first()
+                stored_config = assessment.config if assessment and isinstance(assessment.config, dict) else {}
+                scan_options = _assessment_scan_options(stored_config)
+
             self._set_status(AssessmentStatus.REPOSITORY_FETCH, "REPOSITORY_FETCH")
 
             # -----------------------------------------------------------
@@ -100,44 +119,58 @@ class AssessmentPipeline:
             self._set_status(AssessmentStatus.STATIC_SCANS, "STATIC_SCANS")
 
             # Semgrep SAST
-            semgrep_res = self.semgrep.scan(self.assessment_id, workspace_path)
-            if semgrep_res.get("check_status") == CheckStatus.BLOCKED.value:
-                has_partial_failures = True
+            if scan_options["enable_sast"]:
+                semgrep_res = self.semgrep.scan(self.assessment_id, workspace_path)
+                if semgrep_res.get("check_status") in (CheckStatus.BLOCKED.value, CheckStatus.ERROR.value):
+                    has_partial_failures = True
+                trivy_res = self.trivy.scan(self.assessment_id, workspace_path)
+                if trivy_res.get("check_status") in (CheckStatus.BLOCKED.value, CheckStatus.ERROR.value):
+                    has_partial_failures = True
+            else:
+                self._record_skipped_job("semgrep", "SAST was disabled for this assessment.")
+                self._record_skipped_job("trivy", "SAST and configuration scanning were disabled for this assessment.")
 
             # Gitleaks Secret Detection
-            gitleaks_res = self.gitleaks.scan(self.assessment_id, workspace_path)
-            if gitleaks_res.get("check_status") == CheckStatus.BLOCKED.value:
-                has_partial_failures = True
-
-            # Trivy Filesystem & Config Scan
-            trivy_res = self.trivy.scan(self.assessment_id, workspace_path)
-            if trivy_res.get("check_status") == CheckStatus.BLOCKED.value:
-                has_partial_failures = True
+            if scan_options["enable_secrets"]:
+                gitleaks_res = self.gitleaks.scan(self.assessment_id, workspace_path)
+                if gitleaks_res.get("check_status") in (CheckStatus.BLOCKED.value, CheckStatus.ERROR.value):
+                    has_partial_failures = True
+            else:
+                self._record_skipped_job("gitleaks", "Secret detection was disabled for this assessment.")
 
             # -----------------------------------------------------------
             # Stage 4: SBOM Generation
             # -----------------------------------------------------------
             self._set_status(AssessmentStatus.SBOM_GENERATION, "SBOM_GENERATION")
-            syft_res = self.syft.scan(self.assessment_id, workspace_path)
-            sbom_path = syft_res.get("sbom_path")
+            sbom_path = None
+            if scan_options["enable_sbom"]:
+                syft_res = self.syft.scan(self.assessment_id, workspace_path)
+                sbom_path = syft_res.get("sbom_path")
+                if syft_res.get("check_status") in (CheckStatus.BLOCKED.value, CheckStatus.ERROR.value):
+                    has_partial_failures = True
+            else:
+                self._record_skipped_job("syft", "SBOM generation was disabled for this assessment.")
 
             # -----------------------------------------------------------
             # Stage 5: Dependency Vulnerability Analysis (Grype & OSV)
             # -----------------------------------------------------------
             self._set_status(AssessmentStatus.DEPENDENCY_ANALYSIS, "DEPENDENCY_ANALYSIS")
-            if sbom_path and os.path.exists(sbom_path):
-                grype_res = self.grype.scan(self.assessment_id, sbom_path, is_sbom=True)
+            if scan_options["enable_deps"]:
+                if sbom_path and os.path.exists(sbom_path):
+                    grype_res = self.grype.scan(self.assessment_id, sbom_path, is_sbom=True)
+                else:
+                    # Dependency analysis can still run directly on source if
+                    # SBOM generation was switched off or did not produce a file.
+                    grype_res = self.grype.scan(self.assessment_id, workspace_path, is_sbom=False)
+                if grype_res.get("check_status") in (CheckStatus.BLOCKED.value, CheckStatus.ERROR.value):
+                    has_partial_failures = True
+
+                osv_res = self.osv.scan(self.assessment_id, workspace_path)
+                if osv_res.get("check_status") in (CheckStatus.BLOCKED.value, CheckStatus.ERROR.value):
+                    has_partial_failures = True
             else:
-                # Direct directory scan if SBOM was blocked/unavailable
-                grype_res = self.grype.scan(self.assessment_id, workspace_path, is_sbom=False)
-
-            if grype_res.get("check_status") == CheckStatus.BLOCKED.value:
-                has_partial_failures = True
-
-            # OSV Scanner
-            osv_res = self.osv.scan(self.assessment_id, workspace_path)
-            if osv_res.get("check_status") == CheckStatus.BLOCKED.value:
-                has_partial_failures = True
+                self._record_skipped_job("grype", "Dependency analysis was disabled for this assessment.")
+                self._record_skipped_job("osv", "Dependency analysis was disabled for this assessment.")
 
             # -----------------------------------------------------------
             # Stage 6: Runtime Provisioning
@@ -152,22 +185,28 @@ class AssessmentPipeline:
                     logger.info("Using user-supplied staging target for DAST", target_url=target_url)
 
             # If no staging URL provided, attempt automatic Docker runtime provisioning
-            if not target_url:
+            if not target_url and scan_options["enable_runtime"]:
                 runtime_res = self.runtime_orch.provision(self.assessment_id, workspace_path, self.request_id)
                 target_url = runtime_res.get("target_url")
                 if runtime_res.get("status") not in (RuntimeStatus.RUNNING.value,):
                     has_partial_failures = True
+            elif not target_url:
+                self._record_skipped_job("runtime", "Isolated runtime execution was disabled for this assessment.")
 
             # -----------------------------------------------------------
             # Stage 7: Dynamic Security Testing (DAST)
             # -----------------------------------------------------------
             self._set_status(AssessmentStatus.DYNAMIC_TESTING, "DYNAMIC_TESTING")
-            if target_url:
+            if target_url and scan_options["enable_active_dast"]:
                 self.zap.scan(self.assessment_id, target_url)
             else:
-                logger.info("Skipping dynamic testing — no reachable runtime target")
-                # Record ScanJob as NOT_ASSESSED
-                self._record_skipped_job("dast_zap", "Dynamic testing not assessed: runtime was not provisioned.")
+                reason = (
+                    "Active DAST was disabled for this assessment."
+                    if not scan_options["enable_active_dast"]
+                    else "Dynamic testing not assessed: no reachable target was available."
+                )
+                logger.info("Skipping dynamic testing", reason=reason)
+                self._record_skipped_job("dast_zap", reason)
 
             # -----------------------------------------------------------
             # Stage 8: Correlation, Graph & Risk Scoring
@@ -192,12 +231,13 @@ class AssessmentPipeline:
             # -----------------------------------------------------------
             # Stage 10: Report Generation
             # -----------------------------------------------------------
-            self._set_status(AssessmentStatus.REPORT_GENERATION, "REPORT_GENERATION")
+            # Persist the final outcome before report snapshots are gathered so
+            # exported JSON/SARIF do not claim the assessment is still running.
+            final_status = AssessmentStatus.PARTIAL if has_partial_failures else AssessmentStatus.COMPLETED
+            self._set_status(final_status, "REPORT_GENERATION")
             self.report_gen.generate(self.assessment_id, format="json")
             self.report_gen.generate(self.assessment_id, format="sarif")
 
-            # Final status: PARTIAL if some scanners/runtime were blocked, COMPLETED otherwise
-            final_status = AssessmentStatus.PARTIAL if has_partial_failures else AssessmentStatus.COMPLETED
             self._set_status(final_status, "DONE")
 
             logger.info("Assessment pipeline finished successfully", final_status=final_status.value)

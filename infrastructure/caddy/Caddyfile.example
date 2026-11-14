@@ -1,0 +1,60 @@
+# ==============================================================================
+# Complete Caddyfile Example: Co-existence of SmartPark and Sentinel-X
+# /etc/caddy/Caddyfile
+# ==============================================================================
+
+# Global Configuration
+{
+    email admin@yourdomain.com
+    admin off
+}
+
+# ------------------------------------------------------------------------------
+# 1. Existing SmartPark Application (Unchanged & Protected)
+# ------------------------------------------------------------------------------
+smartpark.yourdomain.com {
+    encode gzip
+    reverse_proxy 127.0.0.1:5000 {
+        header_up Host {host}
+        header_up X-Real-IP {remote_host}
+    }
+}
+
+# ------------------------------------------------------------------------------
+# 2. New Sentinel-X Security Assessment Platform (Isolated Subdomain)
+# ------------------------------------------------------------------------------
+sentinelx.yourdomain.com {
+    encode zstd gzip
+
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        X-XSS-Protection "1; mode=block"
+        Referrer-Policy "strict-origin-when-cross-origin"
+    }
+
+    # API Proxy to FastAPI backend
+    handle /api/* {
+        reverse_proxy 127.0.0.1:8000 {
+            header_up Host {host}
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+        }
+    }
+
+    # Dashboard Proxy to React/Nginx frontend
+    handle {
+        reverse_proxy 127.0.0.1:3000 {
+            header_up Host {host}
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+        }
+    }
+
+    log {
+        output file /var/log/caddy/sentinelx_access.log
+    }
+}

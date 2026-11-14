@@ -15,6 +15,7 @@ from urllib.parse import urlparse
 from app.core.config import get_settings
 from app.core.database import db_session
 from app.core.logging import get_logger
+from app.core.repository_url import local_paths_allowed, validate_clone_url
 from app.core.subprocess_utils import run_command
 from app.models import Assessment, GitHubInstallation
 from app.runtime.detection.detector import ProjectDetector
@@ -53,22 +54,46 @@ class RepositoryService:
             target_branch = assessment.branch or repo.default_branch or "main"
             target_sha = assessment.commit_sha
 
-            # Check if user has GitHub App token or OAuth credentials for private repo
+            # Resolve authentication credentials for private repository access:
+            # 1. Repository-specific personal access token (PAT) / deploy token has primary priority.
+            # 2. Fall back to the creator's linked GitHubInstallation OAuth token.
             auth_token = None
-            installation = (
-                db.query(GitHubInstallation)
-                .filter(GitHubInstallation.user_id == assessment.created_by_id)
-                .first()
-            )
-            if installation and installation.encrypted_access_token:
+            if repo.encrypted_auth_token:
                 try:
                     from app.core.security import decrypt_value
-                    auth_token = decrypt_value(installation.encrypted_access_token)
+                    auth_token = decrypt_value(repo.encrypted_auth_token)
                 except Exception as e:
-                    logger.warning("Could not decrypt GitHub token", error=str(e))
+                    logger.warning("Could not decrypt repository auth token", repo=repo.full_name, error=str(e))
+
+            if not auth_token and repo.is_private:
+                installation = (
+                    db.query(GitHubInstallation)
+                    .filter(GitHubInstallation.user_id == assessment.created_by_id)
+                    .first()
+                )
+                if installation and installation.encrypted_access_token:
+                    try:
+                        from app.core.security import decrypt_value
+                        auth_token = decrypt_value(installation.encrypted_access_token)
+                    except Exception as e:
+                        logger.warning("Could not decrypt GitHub token", error=str(e))
 
         if not clone_url:
             clone_url = f"https://github.com/{repo.full_name}.git"
+
+        clone_url = validate_clone_url(clone_url, allow_local=local_paths_allowed())
+        if not clone_url:
+            raise ValueError("Repository clone URL is required.")
+
+        # Helper to strip sensitive credentials from error messages and logs
+        def _sanitize_error(msg: str) -> str:
+            if not msg:
+                return ""
+            import re
+            sanitized = re.sub(r"://([^:@]+):([^@]+)@", r"://\1:[REDACTED]@", msg)
+            if auth_token:
+                sanitized = sanitized.replace(auth_token, "[REDACTED]")
+            return sanitized[:300]
 
         # Check if clone_url is a local directory (e.g. test fixture or local volume)
         if os.path.isdir(clone_url):
@@ -77,16 +102,25 @@ class RepositoryService:
             shutil.copytree(clone_url, workspace_dir, dirs_exist_ok=True)
             actual_sha = target_sha or "local-fixture-head"
         else:
-            # Safe authenticated URL injection (token is never logged)
+            # Safe authenticated URL injection (token is never logged or exposed in errors)
             effective_clone_url = clone_url
-            if auth_token and "github.com" in clone_url:
+            if auth_token:
                 parsed = urlparse(clone_url)
-                effective_clone_url = f"https://x-access-token:{auth_token}@{parsed.netloc}{parsed.path}"
+                host = (parsed.hostname or "").lower()
+                token_clean = auth_token.strip()
+                if "gitlab.com" in host:
+                    effective_clone_url = f"https://oauth2:{token_clean}@{parsed.netloc}{parsed.path}"
+                elif "bitbucket.org" in host:
+                    effective_clone_url = f"https://x-token-auth:{token_clean}@{parsed.netloc}{parsed.path}"
+                else:
+                    # Default: GitHub and standard Git HTTPS servers
+                    effective_clone_url = f"https://x-access-token:{token_clean}@{parsed.netloc}{parsed.path}"
 
             logger.info(
                 "Cloning repository into workspace",
                 repo=repo.full_name,
                 assessment_id=assessment_id,
+                is_authenticated=bool(auth_token),
             )
 
             # Clone shallowly first for efficiency
@@ -116,7 +150,7 @@ class RepositoryService:
                     tool_name="git-clone-default",
                 )
                 if not sub_res.succeeded:
-                    raise RuntimeError(f"Git clone failed for {repo.full_name}: {sub_res.stderr[:200]}")
+                    raise RuntimeError(f"Git clone failed for {repo.full_name}: {_sanitize_error(sub_res.stderr)}")
 
             # If a specific commit SHA was requested, checkout that exact SHA
             actual_sha = target_sha
@@ -128,7 +162,7 @@ class RepositoryService:
                     cwd=str(workspace_dir),
                 )
                 if not checkout_res.succeeded:
-                    raise RuntimeError(f"Failed to checkout requested commit {target_sha}: {checkout_res.stderr[:200]}")
+                    raise RuntimeError(f"Failed to checkout requested commit {target_sha}: {_sanitize_error(checkout_res.stderr)}")
             else:
                 # Resolve and record HEAD commit SHA
                 rev_res = run_command(

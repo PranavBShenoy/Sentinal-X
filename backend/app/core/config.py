@@ -15,6 +15,16 @@ from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+def _default_semgrep_rules_path() -> str:
+    """Resolve bundled Semgrep rules in both the source tree and containers."""
+    candidates = (
+        Path("/app/rules/semgrep/default_rules.json"),
+        Path(__file__).resolve().parents[3] / "rules" / "semgrep" / "default_rules.json",
+        Path.cwd() / "rules" / "semgrep" / "default_rules.json",
+    )
+    return str(next((path for path in candidates if path.is_file()), candidates[0]))
+
+
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
 
@@ -101,7 +111,7 @@ class Settings(BaseSettings):
     # ------------------------------------------------------------------ #
     LLM_PROVIDER: str = "openrouter"
     OPENROUTER_API_KEY: Optional[str] = None
-    OPENROUTER_MODEL: str = "anthropic/claude-3-haiku"
+    OPENROUTER_MODEL: str = "openai/gpt-4o-mini"
     OPENROUTER_SITE_URL: str = "http://localhost:5173"
     OPENROUTER_APP_NAME: str = "SENTINEL-X"
     OPENROUTER_MAX_TOKENS: int = 2000
@@ -111,11 +121,7 @@ class Settings(BaseSettings):
     # Scanner tool paths
     # ------------------------------------------------------------------ #
     SEMGREP_PATH: str = "/home/pranav/Sentinal-X/bin/semgrep" if os.path.exists("/home/pranav/Sentinal-X/bin/semgrep") else "semgrep"
-    SEMGREP_RULES_PATH: str = (
-        str(Path(__file__).resolve().parent.parent.parent.parent / "rules" / "semgrep" / "default_rules.json")
-        if (Path(__file__).resolve().parent.parent.parent.parent / "rules" / "semgrep" / "default_rules.json").exists()
-        else "/home/pranav/Sentinal-X/rules/semgrep/default_rules.json"
-    )
+    SEMGREP_RULES_PATH: str = _default_semgrep_rules_path()
     GITLEAKS_PATH: str = "/home/pranav/Sentinal-X/bin/gitleaks" if os.path.exists("/home/pranav/Sentinal-X/bin/gitleaks") else "gitleaks"
     SYFT_PATH: str = "/home/pranav/Sentinal-X/bin/syft" if os.path.exists("/home/pranav/Sentinal-X/bin/syft") else "syft"
     GRYPE_PATH: str = "/home/pranav/Sentinal-X/bin/grype" if os.path.exists("/home/pranav/Sentinal-X/bin/grype") else "grype"
@@ -188,6 +194,14 @@ class Settings(BaseSettings):
     # ------------------------------------------------------------------ #
     RATE_LIMIT_REQUESTS_PER_MINUTE: int = 60
     LOGIN_RATE_LIMIT_PER_MINUTE: int = 10
+
+    # ------------------------------------------------------------------ #
+    # Monitoring & Alerting
+    # ------------------------------------------------------------------ #
+    ALERT_WEBHOOK_URL: Optional[str] = None
+    ALERT_LATENCY_THRESHOLD_MS: float = 300.0
+    ALERT_QUEUE_THRESHOLD: int = 25
+    ALERT_DISK_THRESHOLD_PERCENT: float = 90.0
 
     @field_validator("JWT_SECRET")
     @classmethod

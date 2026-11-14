@@ -252,6 +252,11 @@ class ApiClient {
       branch: data.branch,
       commit_sha: data.commit_sha,
       config: config ? {
+        enable_sast: config.enable_sast,
+        enable_secrets: config.enable_secrets,
+        enable_sbom: config.enable_sbom,
+        enable_deps: config.enable_deps,
+        enable_runtime: config.enable_runtime,
         target_url: config.target_url,
         enable_active_dast: config.enable_active_dast ?? config.enable_dast,
         enable_git_history_scan: config.enable_git_history_scan,
@@ -365,11 +370,30 @@ class ApiClient {
     });
   }
 
-  getReportDownloadUrl(reportId: string): string {
-    // The API currently authenticates direct browser downloads with its user
-    // access JWT in the query parameter; it does not accept Runtime Host read tokens.
-    const token = this.accessToken ? `?token=${encodeURIComponent(this.accessToken)}` : '';
-    return `${API_BASE}/reports/${reportId}/download${token}`;
+  async downloadReport(reportId: string): Promise<{ blob: Blob; filename: string }> {
+    const headers = new Headers();
+    if (this.accessToken) headers.set('Authorization', `Bearer ${this.accessToken}`);
+
+    const response = await fetch(`${API_BASE}/reports/${encodeURIComponent(reportId)}/download`, {
+      headers,
+    });
+    if (response.status === 401) {
+      this.clearTokens();
+      window.dispatchEvent(new CustomEvent('auth:expired'));
+      throw new Error('Authentication expired. Please sign in again.');
+    }
+    if (!response.ok) throw await this.createApiError(response);
+
+    const disposition = response.headers.get('Content-Disposition') || '';
+    const encodedFilename = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+    const quotedFilename = disposition.match(/filename="?([^";]+)"?/i)?.[1];
+    let filename = `sentinelx-report-${reportId}`;
+    try {
+      filename = encodedFilename ? decodeURIComponent(encodedFilename) : quotedFilename || filename;
+    } catch {
+      filename = quotedFilename || filename;
+    }
+    return { blob: await response.blob(), filename };
   }
 }
 

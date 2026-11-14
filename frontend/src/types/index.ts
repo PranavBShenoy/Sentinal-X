@@ -136,6 +136,11 @@ export type AssessmentProgressResponse = Omit<AssessmentProgress, 'scan_jobs'> &
 
 /** Assessment configuration accepted by the Control Plane API. */
 export interface AssessmentConfig {
+  enable_sast?: boolean;
+  enable_secrets?: boolean;
+  enable_sbom?: boolean;
+  enable_deps?: boolean;
+  enable_runtime?: boolean;
   enable_active_dast?: boolean;
   enable_git_history_scan?: boolean;
   target_url?: string;
@@ -273,6 +278,7 @@ export interface RemediationProposal {
   summary: string | null;
   remediation_steps: string[] | null;
   patch_diff: string | null;
+  generation_mode?: 'ai' | 'deterministic' | null;
   proposed_branch: string | null;
   approved_at: string | null;
   pr_url: string | null;

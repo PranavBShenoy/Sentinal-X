@@ -80,7 +80,7 @@ services:
       - ENCRYPTION_KEY=${ENCRYPTION_KEY:-dGhpcy1pcy1hLTMyLWJ5dGUtc2VjcmV0LWtleS0xMjM0NTY=}
       - LLM_PROVIDER=${LLM_PROVIDER:-openrouter}
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
-      - OPENROUTER_MODEL=${OPENROUTER_MODEL:-anthropic/claude-3.5-sonnet}
+      - OPENROUTER_MODEL=${OPENROUTER_MODEL:-openai/gpt-4o-mini}
       - CORS_ORIGINS=${CORS_ORIGINS:-["http://localhost:3000","http://127.0.0.1:3000","http://localhost:8000"]}
       # API talks to the runtime broker for cleanup on assessment cancellation.
       - BROKER_URL=${BROKER_URL:-http://broker:8001}
@@ -123,6 +123,10 @@ services:
       dockerfile: ../infrastructure/docker/Dockerfile.worker
     container_name: sentinelx-worker
     restart: unless-stopped
+    # Celery also interprets BROKER_URL as its CLI broker setting. The worker
+    # needs that name for the authenticated Runtime Broker API, so pin Celery's
+    # transport explicitly to Redis here.
+    command: ["celery", "-A", "app.workers.celery_app", "--broker=redis://redis:6379/0", "worker", "--loglevel=info", "--concurrency=2"]
     environment:
       - APP_ENV=${APP_ENV:-development}
       - ENVIRONMENT=${ENVIRONMENT:-${APP_ENV:-development}}
@@ -174,6 +178,9 @@ services:
       - sentinelx-internal
       - sentinelx-broker
       - sentinelx-runtime
+      # Outbound access is required for fetching Git repositories. No host port
+      # is published for the worker, so this does not expose an inbound service.
+      - sentinelx-public
 
   # ---------------------------------------------------------------------------
   # Runtime Broker — policy-enforcing Docker boundary.
@@ -320,9 +327,9 @@ services:
     container_name: sentinelx-frontend
     restart: unless-stopped
     ports:
-      # Loopback-only: the frontend is consumed by a same-host reverse proxy or
-      # accessed directly on the host loopback. Do not expose 0.0.0.0:3000 directly.
-      - "127.0.0.1:3000:80"
+      # Public dashboard entry point. The API remains private and is reached
+      # through the frontend Nginx /api proxy over sentinelx-public.
+      - "0.0.0.0:3000:80"
     depends_on:
       - api
     networks:

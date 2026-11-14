@@ -1,0 +1,135 @@
+name: Deploy Sentinel-X to AWS EC2
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-sentinel-x-ec2
+  cancel-in-progress: false
+
+jobs:
+  test:
+    name: Run Pytest & Lint Checks
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: backend/pyproject.toml
+
+      - name: Install backend dependencies
+        working-directory: ./backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install ".[dev]"
+
+      - name: Lint check (Ruff)
+        working-directory: ./backend
+        run: |
+          ruff check .
+
+      - name: Security scan (Bandit)
+        working-directory: ./backend
+        run: |
+          bandit -r app/ -ll -ii
+
+      - name: Run unit tests
+        working-directory: ./backend
+        env:
+          JWT_SECRET: ci-test-secret-key-for-validation-only-not-production
+          ENCRYPTION_KEY: U1RST05HX0ZFUk5FVF9LRVlfVEVTVF9PQUJDRDExMjI=
+          DATABASE_URL: "sqlite:///:memory:"
+          TESTING: "true"
+        run: |
+          PYTHONPATH=. python -m pytest tests/unit/ -v
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install and verify frontend build
+        working-directory: ./frontend
+        run: |
+          npm install
+          npm run typecheck
+          npm run build
+
+  deploy:
+    name: Deploy to AWS EC2
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Deploy to EC2 via SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.EC2_HOST || '54.79.97.73' }}
+          username: ${{ secrets.EC2_USER || 'ubuntu' }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          port: ${{ secrets.EC2_PORT || 22 }}
+          script_stop: true
+          script: |
+            set -euo pipefail
+            DEPLOY_DIR="${{ secrets.DEPLOY_DIR || '/opt/sentinelx' }}"
+            echo "==> Deploying Sentinel-X in $DEPLOY_DIR on EC2..."
+            
+            if [ ! -d "$DEPLOY_DIR" ]; then
+              echo "Error: Deployment directory $DEPLOY_DIR does not exist." >&2
+              exit 1
+            fi
+            
+            cd "$DEPLOY_DIR"
+
+            echo "==> Pulling latest changes from main..."
+            git fetch origin main
+            git reset --hard origin/main
+
+            echo "==> Building and starting Docker Compose services..."
+            docker compose up -d --build --remove-orphans
+
+            echo "==> Running database migrations..."
+            docker compose exec -T api python -m alembic upgrade head || true
+
+            echo "==> Verifying service health..."
+            HEALTHY=false
+            for i in $(seq 1 12); do
+              if curl -s -f http://127.0.0.1:3000/api/v1/health > /dev/null; then
+                echo "==> Sentinel-X API & Frontend are healthy!"
+                HEALTHY=true
+                break
+              fi
+              echo "Waiting for API to become ready... attempt $i/12"
+              sleep 5
+            done
+
+            if [ "$HEALTHY" != "true" ]; then
+              echo "==> Health check failed after 60s. Printing container logs:" >&2
+              docker compose logs --tail=50
+              exit 1
+            fi
+
+            echo "==> Container status:"
+            docker compose ps
+
+            echo "==> Reloading Caddy if configuration changed..."
+            if command -v caddy > /dev/null 2>&1; then
+              sudo caddy reload --config /etc/caddy/Caddyfile || true
+            fi
+
+            echo "==> Cleaning up dangling images..."
+            docker image prune -f
+
+            echo "==> Sentinel-X deployment completed successfully!"

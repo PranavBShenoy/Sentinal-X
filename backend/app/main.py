@@ -199,5 +199,29 @@ def readiness_check(response: Response):
     }
 
 
+@app.get("/health/telemetry", tags=["system"])
+@app.get("/api/v1/health/telemetry", tags=["system"])
+def system_telemetry():
+    """
+    Comprehensive infrastructure telemetry endpoint.
+    Reports database latency, connection pool state, Redis latency, and Celery queue backlog.
+    """
+    from app.services.monitoring_service import monitoring_service
+    return monitoring_service.get_system_telemetry()
+
+
+@app.post("/api/v1/health/alert-test", tags=["system"])
+async def trigger_test_alert(title: str = "Test Operational Alert", message: str = "Manual verification of monitoring hook"):
+    """Trigger a manual test alert via the configured webhook."""
+    from app.services.monitoring_service import monitoring_service
+    delivered = await monitoring_service.send_alert_webhook(
+        event_type="test_alert",
+        severity="info",
+        message=message,
+        metrics={"test": True, "title": title},
+    )
+    return {"delivered": delivered, "configured": bool(settings.ALERT_WEBHOOK_URL)}
+
+
 # Mount API v1 router
 app.include_router(api_router, prefix="/api/v1")

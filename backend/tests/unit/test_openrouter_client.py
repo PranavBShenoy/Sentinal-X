@@ -225,7 +225,11 @@ def test_create_remediation_proposal_deterministic(dummy_finding):
     client.api_key = None  # Ensure deterministic fallback
 
     mock_session = MagicMock()
-    mock_session.query.return_value.filter.return_value.first.return_value = dummy_finding
+    finding_query = MagicMock()
+    finding_query.filter.return_value.first.return_value = dummy_finding
+    proposal_query = MagicMock()
+    proposal_query.filter.return_value.order_by.return_value.first.return_value = None
+    mock_session.query.side_effect = [finding_query, proposal_query]
 
     proposal = client.generate_remediation_proposal(
         finding_id=str(dummy_finding.id),
@@ -239,6 +243,34 @@ def test_create_remediation_proposal_deterministic(dummy_finding):
     assert len(proposal.remediation_steps) > 0
     assert proposal.proposed_branch.startswith("sentinelx-fix/sast-")
     mock_session.add.assert_called_once_with(proposal)
+
+
+def test_create_remediation_proposal_refreshes_existing_pending_proposal(dummy_finding):
+    client = OpenRouterClient()
+    client.api_key = None
+
+    existing_proposal = MagicMock()
+    existing_proposal.status = RemediationStatus.PROPOSED
+    finding_query = MagicMock()
+    finding_query.filter.return_value.first.return_value = dummy_finding
+    proposal_query = MagicMock()
+    proposal_query.filter.return_value.order_by.return_value.first.return_value = existing_proposal
+
+    mock_session = MagicMock()
+    mock_session.query.side_effect = [finding_query, proposal_query]
+
+    with patch.object(client, "analyze_finding", return_value=None):
+        proposal = client.generate_remediation_proposal(
+            finding_id=str(dummy_finding.id),
+            user_id="u1111111-1111-1111-1111-111111111111",
+            session=mock_session,
+        )
+
+    assert proposal is existing_proposal
+    assert proposal.status == RemediationStatus.PROPOSED
+    assert "SQL Injection" in proposal.summary
+    assert proposal.patch_diff is None
+    mock_session.add.assert_not_called()
 
 
 def test_prompt_injection_resistance_in_evidence(dummy_finding):

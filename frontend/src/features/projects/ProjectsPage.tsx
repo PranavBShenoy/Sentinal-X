@@ -277,12 +277,12 @@ export const ProjectsPage: React.FC = () => {
                 </span>
                 <div className="space-y-3">
                   <div>
-                    <label className="block text-xs text-slate-400 mb-1">Clone URL / Local Path</label>
+                  <label className="block text-xs text-slate-400 mb-1">HTTPS Repository URL</label>
                     <input
                       type="text"
                       value={cloneUrl}
                       onChange={(e) => setCloneUrl(e.target.value)}
-                      placeholder="https://github.com/org/repo.git or /path/to/repo"
+                      placeholder="https://github.com/org/repo.git"
                       className="w-full px-3.5 py-2 bg-surface-elevated border border-border rounded-lg text-sm text-slate-100 focus:outline-none focus:border-emerald-500 font-mono text-xs"
                     />
                   </div>

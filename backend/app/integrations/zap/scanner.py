@@ -14,6 +14,7 @@ Combines:
 from __future__ import annotations
 
 import hashlib
+import re
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -810,6 +811,22 @@ class ZapScanner:
                 res = client.get(probe_url, timeout=5)
                 if res.status_code == 200 and len(res.text) > 20:
                     text_lower = res.text.lower()
+                    password_form = re.search(
+                        r"<input\b[^>]*\btype\s*=\s*[\"']password[\"']",
+                        res.text,
+                        flags=re.IGNORECASE,
+                    )
+                    authentication_page = password_form and any(
+                        marker in text_lower
+                        for marker in ("authenticate", "sign in", "log in", "login")
+                    )
+                    if authentication_page:
+                        logger.debug(
+                            "Administrative route returned an authentication page; access is not confirmed",
+                            path=path,
+                        )
+                        continue
+
                     is_admin_content = any(k in text_lower for k in ("dashboard", "admin", "prometheus", "go_gc", "metric", "users"))
                     if is_admin_content:
                         fp = hashlib.sha256(f"dast:auth:{path}:{target_url}".encode()).hexdigest()
@@ -826,7 +843,7 @@ class ZapScanner:
                                 subcategory="BROKEN_ACCESS_CONTROL",
                                 severity=FindingSeverity.HIGH,
                                 status=FindingStatus.OPEN,
-                                confidence=ConfidenceLevel.HIGH,
+                                confidence=ConfidenceLevel.MEDIUM,
                                 source_tool="dast",
                                 rule_id="SEC-ACCESS-CONTROL",
                                 endpoint=probe_url,

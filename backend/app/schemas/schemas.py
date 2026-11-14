@@ -15,6 +15,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
+from app.core.repository_url import local_paths_allowed, validate_clone_url
+
 
 # ---------------------------------------------------------------------------
 # Base / Shared
@@ -109,11 +111,26 @@ class ProjectResponse(BaseSchema):
 
 
 class RepositoryCreate(BaseModel):
-    full_name: str = Field(description="GitHub full name e.g. owner/repo")
+    full_name: str = Field(description="GitHub/GitLab full name e.g. owner/repo")
     github_repo_id: Optional[str] = None
     clone_url: Optional[str] = None
     default_branch: Optional[str] = None
     is_private: bool = False
+    auth_token: Optional[str] = Field(None, max_length=4096, description="Personal Access Token (PAT) or deploy token")
+    auth_token_type: Optional[str] = Field("pat", description="Token type: pat, deploy_token, or ssh_key")
+
+    @field_validator("clone_url")
+    @classmethod
+    def validate_clone_url_field(cls, value: Optional[str]) -> Optional[str]:
+        return validate_clone_url(value, allow_local=local_paths_allowed())
+
+    @field_validator("auth_token")
+    @classmethod
+    def validate_auth_token_field(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return cleaned if cleaned else None
 
 
 class RepositoryResponse(BaseSchema):
@@ -122,6 +139,9 @@ class RepositoryResponse(BaseSchema):
     full_name: str
     default_branch: Optional[str]
     is_private: bool
+    has_auth_token: bool = False
+    auth_token_type: Optional[str] = None
+    auth_token_preview: Optional[str] = None
     created_at: datetime
 
 
@@ -132,6 +152,11 @@ class RepositoryResponse(BaseSchema):
 
 class AssessmentConfig(BaseModel):
     """User-provided assessment configuration."""
+    enable_sast: bool = True
+    enable_secrets: bool = True
+    enable_sbom: bool = True
+    enable_deps: bool = True
+    enable_runtime: bool = True
     enable_active_dast: bool = False
     enable_git_history_scan: bool = False
     target_url: Optional[str] = Field(None, description="Existing staging URL to test")
@@ -354,6 +379,7 @@ class RemediationResponse(BaseSchema):
     summary: Optional[str]
     remediation_steps: Optional[List[str]]
     patch_diff: Optional[str]
+    generation_mode: Optional[str] = None
     proposed_branch: Optional[str]
     approved_at: Optional[datetime]
     pr_url: Optional[str]

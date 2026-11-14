@@ -26,6 +26,7 @@ export const ReportsPage: React.FC = () => {
   const [selectedFormat, setSelectedFormat] = useState<'pdf' | 'json' | 'sarif' | 'csv'>('json');
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
+  const [downloadingReportId, setDownloadingReportId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -76,6 +77,26 @@ export const ReportsPage: React.FC = () => {
       setError(err.message || 'Failed to generate report');
     } finally {
       setGenerating(false);
+    }
+  };
+
+  const handleDownload = async (reportId: string) => {
+    setDownloadingReportId(reportId);
+    setError(null);
+    try {
+      const { blob, filename } = await api.downloadReport(reportId);
+      const objectUrl = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = objectUrl;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+    } catch (err: any) {
+      setError(err.message || 'Failed to download report');
+    } finally {
+      setDownloadingReportId(null);
     }
   };
 
@@ -205,14 +226,15 @@ export const ReportsPage: React.FC = () => {
                   </div>
                 </div>
 
-                <a
-                  href={api.getReportDownloadUrl(rep.id)}
-                  download
+                <button
+                  type="button"
+                  onClick={() => handleDownload(rep.id)}
+                  disabled={downloadingReportId === rep.id}
                   className="px-4 py-2 bg-surface-elevated hover:bg-slate-700 text-slate-200 border border-border rounded-lg text-xs font-semibold flex items-center gap-2 transition-colors self-start sm:self-auto"
                 >
                   <Download className="w-4 h-4 text-emerald-400" />
-                  Download File
-                </a>
+                  {downloadingReportId === rep.id ? 'Preparing Download...' : 'Download File'}
+                </button>
               </div>
             ))}
           </div>

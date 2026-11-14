@@ -34,13 +34,22 @@ def add_repository(
     project: Project = Depends(get_project_or_404),
     db: Session = Depends(get_db),
 ) -> RepositoryResponse:
+    encrypted_token = None
+    if payload.auth_token:
+        from app.core.security import encrypt_value
+        encrypted_token = encrypt_value(payload.auth_token)
+
+    is_private = payload.is_private or bool(payload.auth_token)
+
     repo = Repository(
         project_id=project.id,
         full_name=payload.full_name,
         github_repo_id=payload.github_repo_id,
         clone_url=payload.clone_url,
         default_branch=payload.default_branch or "main",
-        is_private=payload.is_private,
+        is_private=is_private,
+        encrypted_auth_token=encrypted_token,
+        auth_token_type=payload.auth_token_type or "pat" if encrypted_token else None,
     )
     db.add(repo)
     db.flush()

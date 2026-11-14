@@ -20,6 +20,7 @@ celery_app = Celery(
     backend=settings.CELERY_RESULT_BACKEND,
     include=[
         "app.workers.assessment_tasks",
+        "app.workers.monitoring_tasks",
     ],
 )
 
@@ -47,6 +48,7 @@ celery_app.conf.update(
     task_default_queue="sentinelx",
     task_routes={
         "app.workers.assessment_tasks.*": {"queue": "sentinelx"},
+        "app.workers.monitoring_tasks.*": {"queue": "sentinelx"},
     },
 
     # Result expiry

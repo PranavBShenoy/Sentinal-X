@@ -82,7 +82,8 @@ def create_remediation_proposal(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Could not generate remediation proposal for this finding.",
         )
-    return RemediationResponse.model_validate(proposal)
+    response = RemediationResponse.model_validate(proposal)
+    return response.model_copy(update={"generation_mode": client.last_generation_mode})
 
 
 @router.get("/assessments/{assessment_id}/remediations", response_model=List[RemediationResponse])

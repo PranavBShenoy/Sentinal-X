@@ -257,10 +257,30 @@ class Repository(Base):
     clone_url = Column(String(1000), nullable=True)
     default_branch = Column(String(200), nullable=True)
     is_private = Column(Boolean, default=False)
+    encrypted_auth_token = Column(Text, nullable=True)
+    auth_token_type = Column(String(50), nullable=True, default="pat")
     created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
 
     project = relationship("Project", back_populates="repositories")
     assessments = relationship("Assessment", back_populates="repository")
+
+    @property
+    def has_auth_token(self) -> bool:
+        return bool(self.encrypted_auth_token)
+
+    @property
+    def auth_token_preview(self) -> str | None:
+        if not self.encrypted_auth_token:
+            return None
+        try:
+            from app.core.security import decrypt_value
+            decrypted = decrypt_value(self.encrypted_auth_token)
+            if len(decrypted) <= 8:
+                return "********"
+            prefix_len = 6 if len(decrypted) > 12 else 4
+            return f"{decrypted[:prefix_len]}...{decrypted[-4:]}"
+        except Exception:
+            return "********"
 
 
 # ---------------------------------------------------------------------------

@@ -117,7 +117,7 @@ export const AssessmentDetailPage: React.FC = () => {
             </div>
             <h1 className="text-xl font-bold text-slate-100 mt-2">
               Branch: <span className="text-emerald-400 font-mono">{assessment.branch}</span>
-              {assessment.commit_sha && (
+              {assessment.commit_sha && !assessment.commit_sha.toLowerCase().includes('redact') && (
                 <span className="ml-2 text-sm text-slate-400 font-mono">
                   ({assessment.commit_sha.substring(0, 7)})
                 </span>

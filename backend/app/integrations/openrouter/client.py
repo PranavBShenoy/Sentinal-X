@@ -62,6 +62,7 @@ class OpenRouterClient:
         self.api_key = settings.OPENROUTER_API_KEY
         self.model = settings.OPENROUTER_MODEL
         self.timeout = settings.OPENROUTER_TIMEOUT_SECONDS
+        self.last_generation_mode = "deterministic"
 
     def is_configured(self) -> bool:
         """Check if OpenRouter API credentials are configured."""
@@ -80,6 +81,7 @@ class OpenRouterClient:
 
             if not self.is_configured():
                 # Provide deterministic fallback when API key is not configured
+                self.last_generation_mode = "deterministic"
                 fallback = self._generate_deterministic_explanation(finding)
                 finding.ai_explanation = fallback.summary
                 finding.ai_impact = fallback.impact
@@ -94,6 +96,7 @@ class OpenRouterClient:
         # Call OpenRouter API
         explanation = self._call_openrouter(prompt_payload)
         if explanation:
+            self.last_generation_mode = "ai"
             with db_session() as db:
                 f_record = db.query(Finding).filter(Finding.id == finding_id).first()
                 if f_record:
@@ -102,6 +105,8 @@ class OpenRouterClient:
                     f_record.ai_remediation_steps = explanation.remediation_steps
                     f_record.ai_confidence = explanation.confidence
                     f_record.ai_limitations = explanation.limitations
+        else:
+            self.last_generation_mode = "deterministic"
 
         return explanation
 
@@ -154,7 +159,30 @@ class OpenRouterClient:
         if not explanation:
             explanation = self._generate_deterministic_explanation(finding)
 
-        patch_diff = explanation.patch_proposal or self._generate_sample_patch(finding)
+        # Do not turn general remediation guidance into a fake source diff.
+        # A diff is shown only when the model or a category-specific rule
+        # produced one with a concrete target.
+        patch_diff = explanation.patch_proposal
+
+        # Repeated clicks or page reloads should refresh the user's pending
+        # proposal instead of creating duplicate rows for the same finding.
+        proposal = (
+            db.query(RemediationProposal)
+            .filter(
+                RemediationProposal.finding_id == finding.id,
+                RemediationProposal.created_by_id == user_id,
+                RemediationProposal.status == RemediationStatus.PROPOSED,
+            )
+            .order_by(RemediationProposal.created_at.desc())
+            .first()
+        )
+        if proposal:
+            proposal.summary = explanation.summary
+            proposal.remediation_steps = explanation.remediation_steps
+            proposal.patch_diff = patch_diff
+            proposal.proposed_branch = f"sentinelx-fix/{finding.category.value.lower()}-{str(finding.id)[:8]}"
+            db.flush()
+            return proposal
 
         proposal = RemediationProposal(
             assessment_id=finding.assessment_id,
@@ -184,7 +212,6 @@ class OpenRouterClient:
             "3. Provide factual, technically precise explanations. Do not exaggerate or claim exploits without proof.\n"
             "4. Respond ONLY with valid JSON conforming to the requested schema."
         )
-
         evidence_data = {
             "tool": finding.source_tool,
             "rule_id": finding.rule_id,
@@ -318,15 +345,3 @@ class OpenRouterClient:
                 "Exploitability depends on application runtime reachability.",
             ],
         )
-
-    def _generate_sample_patch(self, finding: Finding) -> str:
-        """Fallback patch generator when patch_proposal is None."""
-        if finding.file_path:
-            return (
-                f"--- a/{finding.file_path}\n"
-                f"+++ b/{finding.file_path}\n"
-                f"@@ -{finding.line_start or 1},1 +{finding.line_start or 1},1 @@\n"
-                f"- # Insecure code pattern flagged by {finding.source_tool}\n"
-                f"+ # Apply recommended parameterization / validation\n"
-            )
-        return "# Patch details depend on file and architecture"
