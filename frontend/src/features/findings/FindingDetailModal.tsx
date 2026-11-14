@@ -1,18 +1,19 @@
 import React, { useState, useEffect } from 'react';
-import { Finding, FindingStatus, RemediationProposal } from '../../types';
+import { Finding, RemediationProposal } from '../../types';
 import { api } from '../../lib/api';
 import { SeverityBadge } from '../../components/SeverityBadge';
-import { RiskScoreMeter } from '../../components/RiskScoreMeter';
 import {
   X,
   Code,
-  ShieldAlert,
   Bot,
   Wrench,
   CheckCircle2,
   AlertTriangle,
   FileCode,
-  ExternalLink,
+  Globe,
+  Layers,
+  Terminal,
+  ShieldCheck,
 } from 'lucide-react';
 
 function hasReviewableDiff(diff: string | null | undefined): boolean {
@@ -44,15 +45,43 @@ export const FindingDetailModal: React.FC<FindingDetailModalProps> = ({
     message: string;
   } | null>(null);
   const [generatingAi, setGeneratingAi] = useState(false);
+  const [loadingAi, setLoadingAi] = useState(false);
   const [aiProposal, setAiProposal] = useState<RemediationProposal | null>(null);
   const [remediationError, setRemediationError] = useState<string | null>(null);
   const reviewableDiff = hasReviewableDiff(aiProposal?.patch_diff);
 
+  // Synchronize triage status & notes when finding updates
   useEffect(() => {
     setSelectedStatus(finding.status);
     setNotes(finding.suppression_reason || '');
+  }, [finding.status, finding.suppression_reason]);
+
+  // CRITICAL FIX: Reset and load proposal specific to this finding ID to avoid state leaks
+  useEffect(() => {
     setDispositionFeedback(null);
-  }, [finding.id, finding.status, finding.suppression_reason]);
+    setRemediationError(null);
+    setAiProposal(null);
+
+    let isMounted = true;
+    setLoadingAi(true);
+
+    api.getFindingRemediation(finding.id)
+      .then((proposal) => {
+        if (isMounted && proposal) {
+          setAiProposal(proposal);
+        }
+      })
+      .catch(() => {
+        // Ignored; finding may not have a proposal yet
+      })
+      .finally(() => {
+        if (isMounted) setLoadingAi(false);
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [finding.id]);
 
   const handleUpdateDisposition = async () => {
     setUpdating(true);
@@ -81,6 +110,14 @@ export const FindingDetailModal: React.FC<FindingDetailModalProps> = ({
     try {
       const proposal = await api.generateRemediation(finding.id);
       setAiProposal(proposal);
+      // Sync finding in parent state so finding has the newly generated ai explanation and steps
+      const updatedFinding: Finding = {
+        ...finding,
+        ai_explanation: proposal.summary,
+        ai_remediation_steps: proposal.remediation_steps || [],
+        ai_remediation: proposal.remediation_steps?.join('\n') || null,
+      };
+      onDispositionUpdated(updatedFinding);
       setActiveTab('ai');
     } catch (err: any) {
       setRemediationError(err.message || 'Failed to generate remediation proposal');
@@ -88,6 +125,15 @@ export const FindingDetailModal: React.FC<FindingDetailModalProps> = ({
       setGeneratingAi(false);
     }
   };
+
+  const rawEvidence = finding.raw_evidence;
+  const rawMessage = rawEvidence?.extra?.message || rawEvidence?.message || null;
+  const rawMetadata = rawEvidence?.extra?.metadata || rawEvidence?.metadata || null;
+  const hasEvidenceContent = Boolean(
+    finding.code_snippet ||
+    (rawEvidence && Object.keys(rawEvidence).length > 0) ||
+    (finding.evidence && finding.evidence.length > 0)
+  );
 
   return (
     <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
@@ -98,10 +144,10 @@ export const FindingDetailModal: React.FC<FindingDetailModalProps> = ({
             <div className="flex items-center gap-2.5">
               <SeverityBadge severity={finding.severity} />
               <span className="font-mono text-xs text-slate-400 bg-surface-elevated px-2 py-0.5 rounded border border-border">
-                {finding.tool_name}
+                {finding.tool_name || finding.source_tool}
               </span>
               <span className="font-mono text-xs text-emerald-400 font-semibold">
-                Risk Score: {finding.risk_score.toFixed(1)}/10
+                Risk Score: {typeof finding.risk_score === 'number' ? finding.risk_score.toFixed(1) : finding.risk_score}/10
               </span>
               <span
                 className={`font-mono text-xs px-2 py-0.5 rounded border font-semibold ${
@@ -120,16 +166,20 @@ export const FindingDetailModal: React.FC<FindingDetailModalProps> = ({
               </span>
             </div>
             <h2 className="text-lg font-bold text-slate-100">{finding.title}</h2>
-            {finding.file_path && (
+            {finding.file_path ? (
               <div className="flex items-center gap-1.5 text-xs text-slate-400 font-mono">
                 <FileCode className="w-3.5 h-3.5 text-slate-500" />
                 <span>
                   {finding.file_path}
-                  {finding.line_start && `:${finding.line_start}`}
+                  {finding.line_start ? `:${finding.line_start}` : ''}
                 </span>
               </div>
-
-            )}
+            ) : finding.endpoint ? (
+              <div className="flex items-center gap-1.5 text-xs text-slate-400 font-mono">
+                <Globe className="w-3.5 h-3.5 text-slate-500" />
+                <span>{finding.endpoint}</span>
+              </div>
+            ) : null}
           </div>
 
           <button
@@ -154,12 +204,13 @@ export const FindingDetailModal: React.FC<FindingDetailModalProps> = ({
           </button>
           <button
             onClick={() => setActiveTab('evidence')}
-            className={`py-3 border-b-2 transition-colors ${
+            className={`py-3 border-b-2 transition-colors flex items-center gap-1.5 ${
               activeTab === 'evidence'
                 ? 'border-emerald-500 text-emerald-400'
                 : 'border-transparent text-slate-400 hover:text-slate-200'
             }`}
           >
+            <Terminal className="w-3.5 h-3.5" />
             Evidence & Snippets
           </button>
           <button
@@ -185,7 +236,7 @@ export const FindingDetailModal: React.FC<FindingDetailModalProps> = ({
                   Description
                 </h4>
                 <div className="bg-surface-elevated/70 p-4 rounded-xl border border-border/80 text-sm text-slate-200 leading-relaxed">
-                  {finding.description}
+                  {finding.description || 'No detailed description provided by the scanner.'}
                 </div>
               </div>
 
@@ -206,7 +257,9 @@ export const FindingDetailModal: React.FC<FindingDetailModalProps> = ({
                 <div className="p-3 bg-surface-elevated rounded-lg border border-border">
                   <span className="text-[11px] text-slate-400 block mb-1">Base CVSS Score</span>
                   <span className="font-mono text-xs font-semibold text-slate-200">
-                    {finding.cvss_score !== null ? finding.cvss_score.toFixed(1) : 'N/A'}
+                    {finding.cvss_score !== null && finding.cvss_score !== undefined
+                      ? Number(finding.cvss_score).toFixed(1)
+                      : 'N/A'}
                   </span>
                 </div>
                 <div className="p-3 bg-surface-elevated rounded-lg border border-border">
@@ -267,7 +320,6 @@ export const FindingDetailModal: React.FC<FindingDetailModalProps> = ({
                     <option value="ACCEPTED_RISK">ACCEPTED_RISK (Risk Exception)</option>
                     <option value="FIXED">FIXED (Mitigated / Verified)</option>
                     <option value="SUPPRESSED">SUPPRESSED (Muted)</option>
-                    {/* Fallback legacy compatibility */}
                     {selectedStatus === 'SUSPECTED' && <option value="SUSPECTED">SUSPECTED (Under Review)</option>}
                     {selectedStatus === 'MITIGATED' && <option value="MITIGATED">MITIGATED (Fix Verified)</option>}
                   </select>
@@ -292,10 +344,144 @@ export const FindingDetailModal: React.FC<FindingDetailModalProps> = ({
 
           {activeTab === 'evidence' && (
             <div className="space-y-4">
-              <h4 className="text-xs uppercase font-semibold text-slate-400 tracking-wider">
-                Captured Evidence & Context
-              </h4>
-              {finding.evidence && finding.evidence.length > 0 ? (
+              <div className="flex items-center justify-between">
+                <h4 className="text-xs uppercase font-semibold text-slate-400 tracking-wider flex items-center gap-1.5">
+                  <Layers className="w-4 h-4 text-emerald-400" />
+                  Captured Evidence & Context
+                </h4>
+                <span className="text-[11px] font-mono text-slate-400 bg-surface-elevated px-2 py-0.5 rounded border border-border">
+                  Tool: {finding.tool_name || finding.source_tool}
+                </span>
+              </div>
+
+              {/* Code Snippet Evidence (Semgrep / Secrets / Vulnerability) */}
+              {finding.code_snippet && (
+                <div className="p-4 rounded-xl bg-[#090d16] border border-border space-y-2 font-mono text-xs">
+                  <div className="flex items-center justify-between font-sans">
+                    <span className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
+                      <Code className="w-3.5 h-3.5 text-emerald-400" />
+                      Captured Source Code Snippet
+                    </span>
+                    <span className="text-[11px] text-slate-400 flex items-center gap-1">
+                      <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" />
+                      Zero-Trust Sanitized
+                    </span>
+                  </div>
+                  {finding.file_path && (
+                    <div className="text-[11px] text-slate-400 font-mono">
+                      File: {finding.file_path}:{finding.line_start || 1}
+                    </div>
+                  )}
+                  <pre className="overflow-x-auto text-emerald-300 p-3 rounded-lg bg-surface/50 border border-border/40 whitespace-pre leading-relaxed">
+                    {finding.code_snippet}
+                  </pre>
+                </div>
+              )}
+
+              {/* Scanner Diagnostic Observation / Message */}
+              {rawMessage && (
+                <div className="p-4 rounded-xl bg-surface-elevated border border-border space-y-1.5 text-xs">
+                  <span className="font-semibold text-emerald-400 uppercase tracking-wider text-[11px] block">
+                    Scanner Observation & Message
+                  </span>
+                  <p className="text-slate-200 leading-relaxed font-sans">
+                    {rawMessage}
+                  </p>
+                </div>
+              )}
+
+              {/* Metadata Tags / Intelligence */}
+              {rawMetadata && (
+                <div className="p-4 rounded-xl bg-surface-elevated/70 border border-border space-y-3 text-xs">
+                  <span className="font-semibold text-slate-400 uppercase tracking-wider text-[11px] block">
+                    Scanner Taxonomy & References
+                  </span>
+                  <div className="flex flex-wrap gap-2">
+                    {rawMetadata.cwe && (
+                      <span className="bg-surface px-2.5 py-1 rounded border border-border text-[11px] text-amber-300 font-mono">
+                        {Array.isArray(rawMetadata.cwe) ? rawMetadata.cwe.join(', ') : rawMetadata.cwe}
+                      </span>
+                    )}
+                    {rawMetadata.owasp && (
+                      <span className="bg-surface px-2.5 py-1 rounded border border-border text-[11px] text-blue-300 font-mono">
+                        OWASP: {Array.isArray(rawMetadata.owasp) ? rawMetadata.owasp.join(', ') : rawMetadata.owasp}
+                      </span>
+                    )}
+                    {rawMetadata.impact && (
+                      <span className="bg-surface px-2.5 py-1 rounded border border-border text-[11px] text-slate-300 font-mono">
+                        Impact: {rawMetadata.impact}
+                      </span>
+                    )}
+                    {rawMetadata.confidence && (
+                      <span className="bg-surface px-2.5 py-1 rounded border border-border text-[11px] text-slate-300 font-mono">
+                        Confidence: {rawMetadata.confidence}
+                      </span>
+                    )}
+                    {rawMetadata.likelihood && (
+                      <span className="bg-surface px-2.5 py-1 rounded border border-border text-[11px] text-slate-300 font-mono">
+                        Likelihood: {rawMetadata.likelihood}
+                      </span>
+                    )}
+                  </div>
+                  {rawMetadata.references && Array.isArray(rawMetadata.references) && rawMetadata.references.length > 0 && (
+                    <div className="pt-2 border-t border-border/60">
+                      <span className="text-[11px] text-slate-400 block mb-1">References:</span>
+                      <ul className="space-y-1">
+                        {rawMetadata.references.slice(0, 3).map((ref: string, idx: number) => (
+                          <li key={idx} className="truncate">
+                            <a
+                              href={ref}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="text-emerald-400 hover:underline text-[11px] font-mono"
+                            >
+                              {ref}
+                            </a>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* DAST / HTTP Header Context */}
+              {rawEvidence && rawEvidence.header && (
+                <div className="p-4 rounded-xl bg-surface-elevated border border-border space-y-2 text-xs">
+                  <span className="font-semibold text-emerald-400 uppercase tracking-wider text-[11px] block">
+                    HTTP Response Header Audit
+                  </span>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 font-mono text-xs">
+                    <div className="p-2.5 bg-surface rounded border border-border">
+                      <span className="text-[10px] text-slate-400 block">Header</span>
+                      <span className="text-slate-200">{rawEvidence.header}</span>
+                    </div>
+                    <div className="p-2.5 bg-surface rounded border border-border">
+                      <span className="text-[10px] text-slate-400 block">Status</span>
+                      <span className="text-amber-300">{rawEvidence.status || 'detected'}</span>
+                    </div>
+                    <div className="p-2.5 bg-surface rounded border border-border">
+                      <span className="text-[10px] text-slate-400 block">Actual Value</span>
+                      <span className="text-slate-300 truncate block">{rawEvidence.actual || '(None / Missing)'}</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Raw JSON Payload */}
+              {rawEvidence && Object.keys(rawEvidence).length > 0 && (
+                <div className="p-4 rounded-xl bg-surface-elevated/40 border border-border space-y-2 text-xs">
+                  <span className="font-semibold text-slate-400 font-mono text-[11px] uppercase block">
+                    Complete Raw Scanner Payload
+                  </span>
+                  <pre className="overflow-x-auto text-slate-300 p-3 rounded-lg bg-[#090d16] border border-border/40 font-mono text-xs max-h-52">
+                    {JSON.stringify(rawEvidence, null, 2)}
+                  </pre>
+                </div>
+              )}
+
+              {/* Legacy finding.evidence array if present */}
+              {finding.evidence && finding.evidence.length > 0 && (
                 finding.evidence.map((ev, i) => (
                   <div key={i} className="p-4 rounded-xl bg-surface-elevated border border-border font-mono text-xs">
                     <div className="text-[11px] text-emerald-400 mb-2 uppercase">
@@ -306,20 +492,18 @@ export const FindingDetailModal: React.FC<FindingDetailModalProps> = ({
                     </pre>
                   </div>
                 ))
-              ) : (
+              )}
+
+              {/* Fallback if zero evidence was stored */}
+              {!hasEvidenceContent && (
                 <div className="p-6 bg-surface-elevated/40 rounded-xl border border-border text-center text-xs text-slate-400">
-                  {finding.file_path ? (
-                    <div>
-                      <p className="font-mono text-slate-300">
-                        File: {finding.file_path}:{finding.line_start}
-                      </p>
-                      <p className="mt-1 text-slate-500">
-                        Secret patterns and sensitive strings were automatically masked in accordance with zero-trust storage policies.
-                      </p>
-                    </div>
-                  ) : (
-                    'No raw snippet payload stored for this finding.'
-                  )}
+                  <FileCode className="w-8 h-8 text-slate-600 mx-auto mb-2" />
+                  <p className="font-mono text-slate-300">
+                    {finding.file_path ? `${finding.file_path}:${finding.line_start || 1}` : finding.endpoint || 'Repository scope'}
+                  </p>
+                  <p className="mt-1 text-slate-500 max-w-md mx-auto">
+                    No source code snippet was stored for this finding. Secret tokens and sensitive strings were automatically masked in accordance with zero-trust storage policies.
+                  </p>
                 </div>
               )}
             </div>
@@ -334,11 +518,15 @@ export const FindingDetailModal: React.FC<FindingDetailModalProps> = ({
                 </h4>
                 <button
                   onClick={handleGenerateAiFix}
-                  disabled={generatingAi || !!aiProposal}
-                  className="px-3 py-1.5 bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 border border-emerald-500/30 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors"
+                  disabled={generatingAi}
+                  className="px-3.5 py-1.5 bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 border border-emerald-500/30 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors disabled:opacity-50"
                 >
-                  <Wrench className="w-3.5 h-3.5" />
-                  {generatingAi ? 'Analyzing...' : aiProposal ? 'Analysis Complete' : 'Generate AI Analysis'}
+                  <Wrench className={`w-3.5 h-3.5 ${generatingAi ? 'animate-spin' : ''}`} />
+                  {generatingAi
+                    ? 'Analyzing...'
+                    : aiProposal || finding.ai_explanation
+                    ? 'Re-analyze with AI'
+                    : 'Generate AI Analysis'}
                 </button>
               </div>
 
@@ -348,23 +536,35 @@ export const FindingDetailModal: React.FC<FindingDetailModalProps> = ({
                 </div>
               )}
 
-              {aiProposal?.generation_mode === 'deterministic' && (
-                <div className="p-3 rounded-lg border border-amber-700/60 bg-amber-950/20 text-xs text-amber-200">
-                  AI analysis is unavailable, so these are rule-based remediation steps. Check the
-                  server's AI provider configuration and try again later.
+              {loadingAi && !aiProposal && (
+                <div className="p-3 rounded-lg border border-border bg-surface-elevated/40 text-xs text-slate-400 flex items-center gap-2">
+                  <div className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+                  Checking for existing AI analysis...
                 </div>
               )}
 
-              {(aiProposal?.remediation_steps?.length || finding.ai_remediation) && (
+              {aiProposal?.generation_mode === 'deterministic' && (
+                <div className="p-3 rounded-lg border border-amber-700/60 bg-amber-950/20 text-xs text-amber-200">
+                  AI analysis is currently unavailable, so these are rule-based remediation steps. Check the
+                  server&apos;s AI provider configuration and try again later.
+                </div>
+              )}
+
+              {(aiProposal?.remediation_steps?.length || finding.ai_remediation_steps?.length || finding.ai_remediation) ? (
                 <div className="p-4 rounded-xl bg-surface-elevated border border-border space-y-2">
                   <div className="text-xs font-semibold text-emerald-400">Remediation Guidance</div>
                   <ul className="list-disc pl-5 space-y-1 text-xs text-slate-200">
-                    {(aiProposal?.remediation_steps ?? finding.ai_remediation?.split('\n') ?? []).map((step, index) => (
+                    {(
+                      aiProposal?.remediation_steps ??
+                      finding.ai_remediation_steps ??
+                      finding.ai_remediation?.split('\n') ??
+                      []
+                    ).map((step, index) => (
                       <li key={index}>{step}</li>
                     ))}
                   </ul>
                 </div>
-              )}
+              ) : null}
 
               {(aiProposal?.summary || finding.ai_explanation) ? (
                 <div className="p-4 rounded-xl bg-surface-elevated border border-border space-y-3">
@@ -375,7 +575,7 @@ export const FindingDetailModal: React.FC<FindingDetailModalProps> = ({
                 </div>
               ) : (
                 <div className="p-4 rounded-xl bg-surface-elevated/40 border border-border text-xs text-slate-400">
-                  Request AI guidance here. A reviewable code diff appears only when relevant source context is available.
+                  No AI guidance has been generated yet for this finding. Click &quot;Generate AI Analysis&quot; above to request an evidence-grounded security explanation and fix recommendations.
                 </div>
               )}
 
@@ -386,13 +586,13 @@ export const FindingDetailModal: React.FC<FindingDetailModalProps> = ({
                     {aiProposal.patch_diff}
                   </pre>
                 </div>
-              ) : aiProposal && (
+              ) : aiProposal ? (
                 <div className="p-4 rounded-xl bg-surface-elevated/40 border border-border text-xs text-slate-400">
                   {aiProposal.patch_diff
                     ? 'The AI returned a remediation suggestion, not a unified code diff. It cannot be applied or approved as a patch.'
                     : 'No reviewable source diff was produced for this finding. Review the guidance above; a code diff requires relevant source evidence.'}
                 </div>
-              )}
+              ) : null}
             </div>
           )}
         </div>

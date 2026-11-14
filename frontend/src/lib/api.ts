@@ -341,6 +341,14 @@ class ApiClient {
     return this.request<RemediationProposal[]>(`/assessments/${assessmentId}/remediations`);
   }
 
+  async getFindingRemediation(findingId: string): Promise<RemediationProposal | null> {
+    try {
+      return await this.request<RemediationProposal | null>(`/findings/${findingId}/remediation`);
+    } catch {
+      return null;
+    }
+  }
+
   async generateRemediation(findingId: string): Promise<RemediationProposal> {
     return this.request<RemediationProposal>(`/findings/${findingId}/remediate`, {
       method: 'POST',

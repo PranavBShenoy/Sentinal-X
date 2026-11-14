@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.core.database import db_session
 from app.core.logging import get_logger
-from app.core.secret_redactor import redact
+from app.core.secret_redactor import redact, redact_dict
 from app.models import Finding, FindingCategory, FindingSeverity, RemediationProposal, RemediationStatus
 
 logger = get_logger(__name__)
@@ -164,6 +164,13 @@ class OpenRouterClient:
         # produced one with a concrete target.
         patch_diff = explanation.patch_proposal
 
+        # Keep finding fields in sync with generated explanation in the caller's session
+        finding.ai_explanation = explanation.summary
+        finding.ai_impact = explanation.impact
+        finding.ai_remediation_steps = explanation.remediation_steps
+        finding.ai_confidence = explanation.confidence
+        finding.ai_limitations = explanation.limitations
+
         # Repeated clicks or page reloads should refresh the user's pending
         # proposal instead of creating duplicate rows for the same finding.
         proposal = (
@@ -219,11 +226,13 @@ class OpenRouterClient:
             "severity": finding.severity.value,
             "file": finding.file_path,
             "line": finding.line_start,
+            "endpoint": finding.endpoint,
             "component": finding.component,
             "affected_version": finding.affected_version,
             "fixed_version": finding.fixed_version,
             "cve_ids": finding.cve_ids,
             "code_snippet": redact(finding.code_snippet) if finding.code_snippet else None,
+            "raw_evidence": redact_dict(finding.raw_evidence) if finding.raw_evidence else None,
         }
 
         user_msg = (

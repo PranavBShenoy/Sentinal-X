@@ -223,6 +223,7 @@ export interface FindingResponse {
   ai_impact: string | null;
   ai_remediation_steps: string[] | null;
   code_snippet: string | null;
+  raw_evidence?: Record<string, any> | null;
   suppression_reason?: string | null;
   suppressed_by_id?: string | null;
   suppressed_at?: string | null;
@@ -242,6 +243,7 @@ export interface Finding extends Omit<FindingResponse, 'risk_score' | 'cve_ids'>
   ai_remediation: string | null;
   created_at: string;
   evidence?: Evidence[];
+  raw_evidence?: Record<string, any> | null;
 }
 
 export interface GraphNode {

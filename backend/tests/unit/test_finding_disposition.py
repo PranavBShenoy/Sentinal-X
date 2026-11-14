@@ -178,3 +178,55 @@ def test_generate_remediation_proposal_endpoint(client, auth_headers, sample_fin
     assert "generation_mode" in data
     assert data["remediation_steps"] is not None or data["summary"] is not None
 
+
+def test_get_finding_remediation_endpoint(client, auth_headers, sample_finding):
+    """Test retrieving existing remediation proposal for a finding."""
+    # Before creation, should return None/200
+    res_before = client.get(
+        f"/api/v1/findings/{sample_finding.id}/remediation",
+        headers=auth_headers,
+    )
+    assert res_before.status_code == 200
+    assert res_before.json() is None
+
+    # Generate proposal
+    client.post(
+        f"/api/v1/findings/{sample_finding.id}/remediate",
+        headers=auth_headers,
+    )
+
+    # After creation, should return the proposal
+    res_after = client.get(
+        f"/api/v1/findings/{sample_finding.id}/remediation",
+        headers=auth_headers,
+    )
+    assert res_after.status_code == 200
+    data = res_after.json()
+    assert data is not None
+    assert data["finding_id"] == str(sample_finding.id)
+
+
+def test_finding_response_includes_raw_evidence_and_snippet(client, auth_headers, test_assessment, db):
+    """Verify that raw_evidence and code_snippet are returned in FindingResponse."""
+    finding = Finding(
+        assessment_id=test_assessment.id,
+        title="Custom Header & Snippet Test",
+        category=FindingCategory.SAST,
+        severity=FindingSeverity.HIGH,
+        status=FindingStatus.OPEN,
+        source_tool="semgrep",
+        file_path="app/test.py",
+        line_start=42,
+        code_snippet="def vulnerable_func(): pass",
+        raw_evidence={"rule": "test-rule", "extra": {"message": "Test message"}},
+    )
+    db.add(finding)
+    db.commit()
+
+    res = client.get(f"/api/v1/findings/{finding.id}", headers=auth_headers)
+    assert res.status_code == 200
+    data = res.json()
+    assert data["code_snippet"] == "def vulnerable_func(): pass"
+    assert data["raw_evidence"] == {"rule": "test-rule", "extra": {"message": "Test message"}}
+
+

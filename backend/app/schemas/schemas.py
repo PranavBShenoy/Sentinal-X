@@ -284,6 +284,7 @@ class FindingResponse(BaseSchema):
     ai_impact: Optional[str]
     ai_remediation_steps: Optional[List[str]]
     code_snippet: Optional[str]
+    raw_evidence: Optional[Dict[str, Any]] = None
     suppression_reason: Optional[str] = None
     suppressed_by_id: Optional[UUID] = None
     suppressed_at: Optional[datetime] = None

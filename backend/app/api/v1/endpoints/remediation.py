@@ -22,6 +22,7 @@ from app.core.logging import get_logger
 from app.integrations.openrouter.client import OpenRouterClient
 from app.models import (
     Assessment,
+    Finding,
     GitHubInstallation,
     Project,
     RemediationProposal,
@@ -82,8 +83,44 @@ def create_remediation_proposal(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Could not generate remediation proposal for this finding.",
         )
+    db.commit()
+    db.refresh(proposal)
     response = RemediationResponse.model_validate(proposal)
     return response.model_copy(update={"generation_mode": client.last_generation_mode})
+
+
+@router.get(
+    "/findings/{finding_id}/remediation",
+    response_model=Optional[RemediationResponse],
+)
+def get_finding_remediation(
+    finding_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> Optional[RemediationResponse]:
+    """Retrieve the latest remediation proposal for a finding if one exists."""
+    finding = (
+        db.query(Finding)
+        .join(Assessment, Finding.assessment_id == Assessment.id)
+        .join(Project, Assessment.project_id == Project.id)
+        .filter(Finding.id == str(finding_id), Project.owner_id == current_user.id)
+        .first()
+    )
+    if not finding:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Finding not found or access denied.",
+        )
+
+    proposal = (
+        db.query(RemediationProposal)
+        .filter(RemediationProposal.finding_id == str(finding_id))
+        .order_by(RemediationProposal.created_at.desc())
+        .first()
+    )
+    if not proposal:
+        return None
+    return RemediationResponse.model_validate(proposal)
 
 
 @router.get("/assessments/{assessment_id}/remediations", response_model=List[RemediationResponse])
