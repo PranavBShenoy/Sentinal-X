@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Finding, FindingStatus, RemediationProposal } from '../../types';
 import { api } from '../../lib/api';
 import { SeverityBadge } from '../../components/SeverityBadge';
@@ -37,20 +37,39 @@ export const FindingDetailModal: React.FC<FindingDetailModalProps> = ({
 
   const [activeTab, setActiveTab] = useState<'details' | 'evidence' | 'ai'>('details');
   const [selectedStatus, setSelectedStatus] = useState<string>(finding.status);
-  const [notes, setNotes] = useState('');
+  const [notes, setNotes] = useState(finding.suppression_reason || '');
   const [updating, setUpdating] = useState(false);
+  const [dispositionFeedback, setDispositionFeedback] = useState<{
+    type: 'success' | 'error';
+    message: string;
+  } | null>(null);
   const [generatingAi, setGeneratingAi] = useState(false);
   const [aiProposal, setAiProposal] = useState<RemediationProposal | null>(null);
   const [remediationError, setRemediationError] = useState<string | null>(null);
   const reviewableDiff = hasReviewableDiff(aiProposal?.patch_diff);
 
+  useEffect(() => {
+    setSelectedStatus(finding.status);
+    setNotes(finding.suppression_reason || '');
+    setDispositionFeedback(null);
+  }, [finding.id, finding.status, finding.suppression_reason]);
+
   const handleUpdateDisposition = async () => {
     setUpdating(true);
+    setDispositionFeedback(null);
     try {
       const updated = await api.updateFindingDisposition(finding.id, selectedStatus, notes);
       onDispositionUpdated(updated);
+      setDispositionFeedback({
+        type: 'success',
+        message: `Disposition updated to ${updated.status}.`,
+      });
     } catch (err: any) {
-      alert(err.message || 'Failed to update finding disposition');
+      console.error('Failed to update finding disposition:', err);
+      setDispositionFeedback({
+        type: 'error',
+        message: err.message || 'Failed to update finding disposition',
+      });
     } finally {
       setUpdating(false);
     }
@@ -83,6 +102,21 @@ export const FindingDetailModal: React.FC<FindingDetailModalProps> = ({
               </span>
               <span className="font-mono text-xs text-emerald-400 font-semibold">
                 Risk Score: {finding.risk_score.toFixed(1)}/10
+              </span>
+              <span
+                className={`font-mono text-xs px-2 py-0.5 rounded border font-semibold ${
+                  finding.status === 'FALSE_POSITIVE'
+                    ? 'bg-slate-800/80 text-slate-400 border-slate-700'
+                    : finding.status === 'ACCEPTED_RISK'
+                    ? 'bg-amber-950/60 text-amber-300 border-amber-800'
+                    : finding.status === 'FIXED' || finding.status === 'MITIGATED'
+                    ? 'bg-blue-950/60 text-blue-300 border-blue-800'
+                    : finding.status === 'CONFIRMED'
+                    ? 'bg-rose-950/60 text-rose-300 border-rose-800'
+                    : 'bg-emerald-950/60 text-emerald-300 border-emerald-800'
+                }`}
+              >
+                {finding.status}
               </span>
             </div>
             <h2 className="text-lg font-bold text-slate-100">{finding.title}</h2>
@@ -185,20 +219,57 @@ export const FindingDetailModal: React.FC<FindingDetailModalProps> = ({
 
               {/* Disposition Review Workflow */}
               <div className="p-4 bg-surface-elevated/60 border border-border rounded-xl space-y-3">
-                <h4 className="text-xs uppercase font-semibold text-slate-300 tracking-wider">
-                  Security Triage & Disposition
-                </h4>
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs uppercase font-semibold text-slate-300 tracking-wider">
+                    Security Triage & Disposition
+                  </h4>
+                  {finding.suppressed_at && (
+                    <span className="text-[11px] text-slate-400 font-mono">
+                      Last updated: {new Date(finding.suppressed_at).toLocaleString()}
+                    </span>
+                  )}
+                </div>
+
+                {dispositionFeedback && (
+                  <div
+                    className={`p-3 rounded-lg text-xs flex items-center justify-between gap-2 border ${
+                      dispositionFeedback.type === 'success'
+                        ? 'bg-emerald-950/40 border-emerald-800 text-emerald-300'
+                        : 'bg-rose-950/40 border-rose-800 text-rose-300'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      {dispositionFeedback.type === 'success' ? (
+                        <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                      ) : (
+                        <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
+                      )}
+                      <span>{dispositionFeedback.message}</span>
+                    </div>
+                    <button
+                      onClick={() => setDispositionFeedback(null)}
+                      className="text-slate-400 hover:text-slate-200"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                )}
+
                 <div className="flex flex-col sm:flex-row gap-3">
                   <select
                     value={selectedStatus}
                     onChange={(e) => setSelectedStatus(e.target.value)}
                     className="px-3 py-2 bg-surface border border-border rounded-lg text-xs text-slate-100 focus:outline-none focus:border-emerald-500"
                   >
-                    <option value="SUSPECTED">SUSPECTED (Under Review)</option>
+                    <option value="OPEN">OPEN (Under Review / Suspected)</option>
                     <option value="CONFIRMED">CONFIRMED (Valid Vulnerability)</option>
-                    <option value="FALSE_POSITIVE">FALSE_POSITIVE (Dismiss)</option>
+                    <option value="FALSE_POSITIVE">FALSE_POSITIVE (Dismiss / False Positive)</option>
                     <option value="ACCEPTED_RISK">ACCEPTED_RISK (Risk Exception)</option>
-                    <option value="MITIGATED">MITIGATED (Fix Verified)</option>
+                    <option value="FIXED">FIXED (Mitigated / Verified)</option>
+                    <option value="SUPPRESSED">SUPPRESSED (Muted)</option>
+                    {/* Fallback legacy compatibility */}
+                    {selectedStatus === 'SUSPECTED' && <option value="SUSPECTED">SUSPECTED (Under Review)</option>}
+                    {selectedStatus === 'MITIGATED' && <option value="MITIGATED">MITIGATED (Fix Verified)</option>}
                   </select>
                   <input
                     type="text"
@@ -210,7 +281,7 @@ export const FindingDetailModal: React.FC<FindingDetailModalProps> = ({
                   <button
                     onClick={handleUpdateDisposition}
                     disabled={updating}
-                    className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded-lg text-xs font-semibold transition-colors"
+                    className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded-lg text-xs font-semibold transition-colors flex items-center justify-center min-w-[140px]"
                   >
                     {updating ? 'Saving...' : 'Update Disposition'}
                   </button>
@@ -295,11 +366,11 @@ export const FindingDetailModal: React.FC<FindingDetailModalProps> = ({
                 </div>
               )}
 
-              {finding.ai_explanation ? (
+              {(aiProposal?.summary || finding.ai_explanation) ? (
                 <div className="p-4 rounded-xl bg-surface-elevated border border-border space-y-3">
                   <div className="text-xs font-semibold text-emerald-400">Security Impact Analysis</div>
                   <p className="text-xs text-slate-200 leading-relaxed whitespace-pre-wrap">
-                    {finding.ai_explanation}
+                    {aiProposal?.summary || finding.ai_explanation}
                   </p>
                 </div>
               ) : (

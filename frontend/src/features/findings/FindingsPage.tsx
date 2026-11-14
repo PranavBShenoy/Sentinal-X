@@ -152,11 +152,12 @@ export const FindingsPage: React.FC = () => {
             className="px-3 py-2 bg-surface-elevated border border-border rounded-lg text-xs text-slate-300 focus:outline-none focus:border-emerald-500"
           >
             <option value="">All Dispositions</option>
+            <option value="OPEN">Open (Under Review)</option>
             <option value="CONFIRMED">Confirmed</option>
-            <option value="SUSPECTED">Suspected</option>
             <option value="FALSE_POSITIVE">False Positive</option>
             <option value="ACCEPTED_RISK">Accepted Risk</option>
-            <option value="MITIGATED">Mitigated</option>
+            <option value="FIXED">Fixed / Mitigated</option>
+            <option value="SUPPRESSED">Suppressed</option>
           </select>
         </div>
       </div>

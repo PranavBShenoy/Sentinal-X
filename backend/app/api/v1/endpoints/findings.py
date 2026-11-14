@@ -5,6 +5,7 @@ Provides search, filtering, pagination, and status updates for security findings
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Optional
 from uuid import UUID
 
@@ -75,7 +76,7 @@ def list_findings(
     )
 
     if assessment_id:
-        query = query.filter(Finding.assessment_id == assessment_id)
+        query = query.filter(Finding.assessment_id == str(assessment_id))
 
     if severity:
         sev_list = [s.strip().upper() for s in severity.split(",") if s.strip()]
@@ -86,7 +87,12 @@ def list_findings(
         query = query.filter(Finding.category.in_(cat_list))
 
     if status_filter:
-        query = query.filter(Finding.status == status_filter.upper())
+        s = status_filter.strip().upper()
+        if s == "SUSPECTED":
+            s = "OPEN"
+        elif s in ("MITIGATED", "RESOLVED"):
+            s = "FIXED"
+        query = query.filter(Finding.status == s)
 
     if source_tool:
         query = query.filter(Finding.source_tool == source_tool.lower())
@@ -137,7 +143,7 @@ def list_assessment_findings(
     db: Session = Depends(get_db),
 ) -> PaginatedResponse:
     """Filter, sort, and paginate security findings for an assessment."""
-    query = db.query(Finding).filter(Finding.assessment_id == assessment.id)
+    query = db.query(Finding).filter(Finding.assessment_id == str(assessment.id))
 
     if severity:
         sev_list = [s.strip().upper() for s in severity.split(",") if s.strip()]
@@ -148,7 +154,12 @@ def list_assessment_findings(
         query = query.filter(Finding.category.in_(cat_list))
 
     if status_filter:
-        query = query.filter(Finding.status == status_filter.upper())
+        s = status_filter.strip().upper()
+        if s == "SUSPECTED":
+            s = "OPEN"
+        elif s in ("MITIGATED", "RESOLVED"):
+            s = "FIXED"
+        query = query.filter(Finding.status == s)
 
     if source_tool:
         query = query.filter(Finding.source_tool == source_tool.lower())
@@ -200,12 +211,22 @@ def update_finding_disposition(
     db: Session = Depends(get_db),
 ) -> FindingResponse:
     """Update finding status (e.g. mark as FALSE_POSITIVE, ACCEPTED_RISK, or SUPPRESSED with reason)."""
-    finding.status = FindingStatus(payload.status)
+    target_status = FindingStatus(payload.status)
+    finding.status = target_status
     reason = payload.suppression_reason or payload.notes
-    if reason:
-        finding.suppression_reason = reason
+    if reason is not None:
+        finding.suppression_reason = reason.strip() if reason.strip() else None
+
+    if target_status in (FindingStatus.FALSE_POSITIVE, FindingStatus.ACCEPTED_RISK, FindingStatus.SUPPRESSED):
         finding.suppressed_by_id = current_user.id
-    db.flush()
+        finding.suppressed_at = datetime.now(timezone.utc)
+    elif target_status in (FindingStatus.OPEN, FindingStatus.CONFIRMED, FindingStatus.FIXED):
+        if not reason:
+            finding.suppressed_by_id = None
+            finding.suppressed_at = None
+
+    db.commit()
+    db.refresh(finding)
     return FindingResponse.model_validate(finding)
 
 
@@ -215,7 +236,7 @@ def get_findings_summary(
     db: Session = Depends(get_db),
 ) -> dict:
     """Get count of findings grouped by severity and category."""
-    findings = db.query(Finding).filter(Finding.assessment_id == assessment.id).all()
+    findings = db.query(Finding).filter(Finding.assessment_id == str(assessment.id)).all()
 
     by_severity = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0, "INFO": 0}
     by_category = {}

@@ -29,12 +29,15 @@ export type CheckStatus =
   | 'INCONCLUSIVE';
 
 export type FindingStatus =
+  | 'OPEN'
   | 'SUSPECTED'
   | 'CONFIRMED'
   | 'FALSE_POSITIVE'
   | 'ACCEPTED_RISK'
+  | 'FIXED'
   | 'MITIGATED'
-  | 'RESOLVED';
+  | 'RESOLVED'
+  | 'SUPPRESSED';
 
 /** Deterministic risk scores produced by the backend RiskEngine are 0–10. */
 export type RiskScore = number;
@@ -220,6 +223,9 @@ export interface FindingResponse {
   ai_impact: string | null;
   ai_remediation_steps: string[] | null;
   code_snippet: string | null;
+  suppression_reason?: string | null;
+  suppressed_by_id?: string | null;
+  suppressed_at?: string | null;
   first_seen_at: string;
   last_seen_at: string;
 }

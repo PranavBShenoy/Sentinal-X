@@ -284,12 +284,15 @@ class FindingResponse(BaseSchema):
     ai_impact: Optional[str]
     ai_remediation_steps: Optional[List[str]]
     code_snippet: Optional[str]
+    suppression_reason: Optional[str] = None
+    suppressed_by_id: Optional[UUID] = None
+    suppressed_at: Optional[datetime] = None
     first_seen_at: datetime
     last_seen_at: datetime
 
 
 class FindingUpdateRequest(BaseModel):
-    status: str = Field(pattern=r"^(OPEN|CONFIRMED|FALSE_POSITIVE|ACCEPTED_RISK|SUPPRESSED)$")
+    status: str = Field(pattern=r"^(OPEN|CONFIRMED|FALSE_POSITIVE|ACCEPTED_RISK|FIXED|SUPPRESSED|SUSPECTED|MITIGATED|RESOLVED)$")
     suppression_reason: Optional[str] = Field(None, max_length=2000)
     notes: Optional[str] = Field(None, max_length=2000)
 
@@ -297,7 +300,12 @@ class FindingUpdateRequest(BaseModel):
     @classmethod
     def normalize_status(cls, v: str) -> str:
         if isinstance(v, str):
-            return v.strip().upper()
+            val = v.strip().upper()
+            if val == "SUSPECTED":
+                return "OPEN"
+            if val in ("MITIGATED", "RESOLVED"):
+                return "FIXED"
+            return val
         return v
 
 
